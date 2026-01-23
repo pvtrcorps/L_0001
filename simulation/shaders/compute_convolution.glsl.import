@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dky0f23ira166"
+path="res://.godot/imported/compute_convolution.glsl-8b69c501958c70719206396e16bd2783.res"
+
+[deps]
+
+source_file="res://simulation/shaders/compute_convolution.glsl"
+dest_files=["res://.godot/imported/compute_convolution.glsl-8b69c501958c70719206396e16bd2783.res"]
+
+[params]
+

@@ -1,0 +1,56 @@
+[gd_scene load_steps=5 format=3 uid="uid://b8y4k2x6s7v1"]
+
+[ext_resource type="Shader" path="res://simulation/display/lenia_render.gdshader" id="1_shader"]
+[ext_resource type="Script" path="res://simulation/LeniaSimulation.gd" id="2_sim"]
+[ext_resource type="Script" path="res://simulation/Main.gd" id="3_main"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_1"]
+shader = ExtResource("1_shader")
+shader_parameter/show_waste = 1.0
+
+[node name="Main" type="Node"]
+script = ExtResource("3_main")
+
+[node name="LeniaSimulation" type="Node" parent="."]
+script = ExtResource("2_sim")
+display_material = SubResource("ShaderMaterial_1")
+
+[node name="CanvasLayer" type="CanvasLayer" parent="."]
+
+[node name="Display" type="ColorRect" parent="CanvasLayer"]
+material = SubResource("ShaderMaterial_1")
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="UI" type="Control" parent="CanvasLayer"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="Panel" type="PanelContainer" parent="CanvasLayer/UI"]
+layout_mode = 1
+anchors_preset = 11
+anchor_left = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -300.0
+offset_top = 10.0
+offset_right = -10.0
+offset_bottom = -10.0
+grow_horizontal = 0
+grow_vertical = 2
+
+[node name="Scroll" type="ScrollContainer" parent="CanvasLayer/UI/Panel"]
+layout_mode = 2
+
+[node name="VBox" type="VBoxContainer" parent="CanvasLayer/UI/Panel/Scroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 8

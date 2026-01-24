@@ -47,6 +47,12 @@ var ubo: RID
 var ping_pong := false
 var initialized := false
 
+# Camera state
+var camera_pos := Vector2(0.0, 0.0)
+var camera_zoom := 1.0
+var is_dragging := false
+var last_mouse_pos := Vector2()
+
 @export var display_material: ShaderMaterial
 
 func _ready():
@@ -94,25 +100,8 @@ func _process(delta):
 			texture_rd_waste.texture_rd_rid = current_waste
 			
 		display_material.set_shader_parameter("show_waste", params["show_waste"])
-		
-	# DEBUG: Checking center pixel value occasionally
-	if Engine.get_frames_drawn() % 120 == 0:
-		var bytes = rd.texture_get_data(tex_living_a if ping_pong else tex_living_b, 0)
-		# RGBA32F = 16 bytes per pixel. Center is at (400, 400).
-		# Index = (400 * 800 + 400) * 16
-		var idx = (400 * 800 + 400) * 16
-		if idx + 16 < bytes.size():
-			var r = bytes.decode_float(idx)
-			var g = bytes.decode_float(idx + 4)
-			var b = bytes.decode_float(idx + 8)
-			print("Center Pixel Living (Step): ", r, ", ", g, ", ", b)
-			
-			# Also check Init Texture (A)
-			var bytesA = rd.texture_get_data(tex_living_a, 0)
-			var rA = bytesA.decode_float(idx)
-			print("Center Pixel Living (TexA): ", rA)
-		else:
-			print("Bytes size too small: ", bytes.size())
+		display_material.set_shader_parameter("camera_pos", camera_pos)
+		display_material.set_shader_parameter("camera_zoom", camera_zoom)
 
 func _update_ubo():
 	var buffer = PackedFloat32Array([
@@ -156,14 +145,12 @@ func _dispatch_step():
 	ping_pong = !ping_pong
 
 func _dispatch_init():
-	print("Dispatching Init...")
 	var set_init = _create_set_init(tex_living_a, tex_waste_a)
 	var compute_list = rd.compute_list_begin()
 	rd.compute_list_bind_compute_pipeline(compute_list, pipeline_init)
 	rd.compute_list_bind_uniform_set(compute_list, set_init, 0)
 	rd.compute_list_dispatch(compute_list, int(params.res_x)/8, int(params.res_y)/8, 1)
 	rd.compute_list_end()
-	print("Init Complete.")
 
 
 func _create_uniforms():
@@ -309,3 +296,20 @@ func clear_simulation():
 	rd.texture_clear(tex_living_b, Color(0,0,0,0), 0, 1, 0, 1)
 	rd.texture_clear(tex_waste_a, Color(0,0,0,0), 0, 1, 0, 1)
 	rd.texture_clear(tex_waste_b, Color(0,0,0,0), 0, 1, 0, 1)
+
+func _input(event):
+	if event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_MIDDLE:
+			is_dragging = event.pressed
+			last_mouse_pos = event.position
+		elif event.button_index == MOUSE_BUTTON_WHEEL_UP:
+			camera_zoom = min(camera_zoom * 1.1, 20.0)
+		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			camera_zoom = max(camera_zoom * 0.9, 0.1)
+			
+	elif event is InputEventMouseMotion:
+		if is_dragging:
+			var viewport_size = get_viewport().get_visible_rect().size
+			var delta = (event.position - last_mouse_pos) / viewport_size.y
+			camera_pos -= delta / camera_zoom
+			last_mouse_pos = event.position

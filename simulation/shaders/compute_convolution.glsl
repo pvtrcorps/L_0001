@@ -5,59 +5,83 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(set = 0, binding = 0, std430) buffer Params {
     vec2 u_res;
-    vec2 u_mouse_world;
-    
     float u_dt;
     float u_seed;
-    float u_density;
-    float u_init_grid;
-    
     float u_R;
-    float u_k_w1;
-    float u_k_w2;
-    float u_k_w3;
-    
-    float u_g_mu_base;
-    float u_g_mu_range;
-    float u_g_sigma;
-    float u_force_flow;
-    
-    float u_force_rep;
-    float u_decay;
-    float u_eat_rate;
-    float u_chemotaxis;
-    
+    float u_repulsion_strength;
+    float u_combat_damage;
+    float u_identity_thr;
     float u_mutation_rate;
-    float u_inertia;
-    float u_brush_size;
-    float u_brush_hue;
-    
-    float u_brush_mode;
-    float u_show_waste;
-    float u_mouse_click;
-    float _pad0;
+    float u_base_decay;
+    float u_init_clusters;
+    float u_init_density;
+    float u_colonize_thr;
+    vec2 u_range_mu;
+    vec2 u_range_sigma;
+    vec2 u_range_radius;
+    vec2 u_range_flow;
+    vec2 u_range_affinity;
+    vec2 u_range_lambda;
+    float _pad1, _pad2, _pad3;
 } p;
 
-layout(set = 0, binding = 1) uniform sampler2D tex_living;
-layout(set = 0, binding = 2, rgba32f) uniform image2D img_potential;
+layout(set = 0, binding = 1) uniform sampler2D tex_state;
+layout(set = 0, binding = 2) uniform sampler2D tex_genome;
+layout(set = 0, binding = 3, rgba32f) uniform image2D img_potential;
 
-float gaussian(float r, float mu, float sigma) {
-    return exp(-0.5 * ((r - mu) / sigma) * ((r - mu) / sigma));
+vec2 unpack2(float packed) {
+    uint bits = floatBitsToUint(packed);
+    float a = float(bits >> 16) / 65535.0;
+    float b = float(bits & 0xFFFFu) / 65535.0;
+    return vec2(a, b);
 }
 
-float K(float r, float mu) {
-    // Anillo 1: Interno (fijo)
-    float k1 = gaussian(r, 0.15, 0.08) * p.u_k_w1;
+float gaussian(float x, float mu, float sigma) {
+    float d = (x - mu) / max(sigma, 0.001);
+    return exp(-0.5 * d * d);
+}
+
+// Species-Dependent Kernel
+// Uses genes to drastically change the ring structure
+float kernel(float r, float g_mu, float g_sigma, float g_radius, float g_affinity) {
     
-    // Anillo 2: Cuerpo (variable con genética 'mu')
-    // El radio se mueve entre 0.2 y 0.5 según la especie
-    float k2 = gaussian(r, 0.2 + mu * 0.3, 0.12) * p.u_k_w2;
+    // Effective Radius: Genes vary size from 0.5x to 1.5x global R
+    float R = p.u_R * (0.5 + g_radius); 
+    float norm_r = r / R;
     
-    // Anillo 3: Externo (fijo)
-    float k3 = gaussian(r, 0.85, 0.08) * p.u_k_w3;
+    if (norm_r > 1.0) return 0.0;
     
-    // Mezclamos la morfología según la especie (mu)
-    return mix(k1 * 0.7 + k2, k2 + k3 * 0.7, mu);
+    // === MORPHOLOGY GENES ===
+    
+    // g_mu: Defines "Species Archetype" 
+    // Low mu = Compact/Circular (Ring 2 close to center)
+    // High mu = Spreading/Worm-like (Ring 2 far from center)
+    float r2_pos = 0.2 + g_mu * 0.45; // [0.2, 0.65]
+    
+    // g_affinity: "Social Factor" -> Controls Core (Ring 1)
+    // High affinity = Strong solid core (Solitons)
+    // Low affinity = Hollow core (Cells/Rings)
+    float w1 = g_affinity * 1.5; // [0.0, 1.5]
+    
+    // g_sigma: "Stability/Rigidity" -> Controls Outer Ring (Ring 3)
+    // Low sigma = High repression at distance (Stripes, rigid structures)
+    // High sigma = Low repression (Diffuse clouds, merging blobs)
+    float w3 = (1.0 - g_sigma) * 1.2; // [0.0, 1.2]
+    
+    // Ring 2 (Body) is always present as the main definer
+    float w2 = 1.0; 
+    
+    // Ring Widths
+    // Base width related to sigma (generalists have wider rings)
+    float sig_base = 0.05 + g_sigma * 0.1;
+    
+    // === RINGS ===
+    float k1 = gaussian(norm_r, 0.1, 0.07) * w1;
+    float k2 = gaussian(norm_r, r2_pos, sig_base) * w2;
+    float k3 = gaussian(norm_r, 0.85, 0.09) * w3;
+    
+    // Combine
+    return k1 + k2 + k3; // Simple additive synthesis allows for complex interference
 }
 
 void main() {
@@ -66,31 +90,44 @@ void main() {
     
     vec2 uv = (vec2(uv_i) + 0.5) / p.u_res;
     
-    // Read center Mu (Green channel)
-    float centerMu = texture(tex_living, uv).g;
+    vec4 centerGenome = texture(tex_genome, uv);
+    float g_mu = centerGenome.r;
+    float g_sigma = centerGenome.g;
+    vec2 radius_flow = unpack2(centerGenome.b);
+    float g_radius = radius_flow.x;
+    vec2 affinity_lambda = unpack2(centerGenome.a);
+    float g_affinity = affinity_lambda.x;
+    
+    float R_max = p.u_R * 1.6; // Safety margin
+    int maxR = int(R_max) + 1;
     
     float sum = 0.0;
     float totalWeight = 0.0;
+    vec2 weightedGradient = vec2(0.0);
     
-    int radius = int(p.u_R);
-    
-    for(int y = -radius; y <= radius; y++) {
-        for(int x = -radius; x <= radius; x++) {
-            vec2 offset = vec2(float(x), float(y));
-            float r = length(offset) / float(radius);
+    for (int dy = -maxR; dy <= maxR; dy++) {
+        for (int dx = -maxR; dx <= maxR; dx++) {
+            vec2 offset = vec2(float(dx), float(dy));
+            float r = length(offset);
             
-            if(r <= 1.0) {
-                float w = K(r, centerMu);
-                // Sample texture with offset. Texture is set to REPEAT in sampler, so simple addition works.
+            float w = kernel(r, g_mu, g_sigma, g_radius, g_affinity);
+            if (w > 0.0) {
                 vec2 sampleUV = uv + offset / p.u_res;
-                sum += texture(tex_living, sampleUV).r * w;
+                float neighborMass = texture(tex_state, sampleUV).r;
+                
+                sum += neighborMass * w;
                 totalWeight += w;
+                
+                if (r > 0.0) {
+                    vec2 dir = offset / r;
+                    weightedGradient += dir * neighborMass * w;
+                }
             }
         }
     }
     
-    if(totalWeight > 0.0) sum /= totalWeight;
+    float U = (totalWeight > 0.0) ? sum / totalWeight : 0.0;
+    vec2 gradU = (totalWeight > 0.0) ? weightedGradient / totalWeight : vec2(0.0);
     
-    // Write Potential (Red channel)
-    imageStore(img_potential, uv_i, vec4(sum, 0.0, 0.0, 1.0));
+    imageStore(img_potential, uv_i, vec4(U, gradU, 1.0));
 }

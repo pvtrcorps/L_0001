@@ -1,12 +1,13 @@
 [gd_scene load_steps=5 format=3 uid="uid://b8y4k2x6s7v1"]
 
-[ext_resource type="Shader" path="res://simulation/display/lenia_render.gdshader" id="1_shader"]
-[ext_resource type="Script" path="res://simulation/LeniaSimulation.gd" id="2_sim"]
-[ext_resource type="Script" path="res://simulation/Main.gd" id="3_main"]
+[ext_resource type="Shader" uid="uid://dtftturftvdug" path="res://simulation/display/lenia_render.gdshader" id="1_shader"]
+[ext_resource type="Script" uid="uid://cb54sy0hxhxvo" path="res://simulation/LeniaSimulation.gd" id="2_sim"]
+[ext_resource type="Script" uid="uid://cfvduxy62vna2" path="res://simulation/Main.gd" id="3_main"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_1"]
 shader = ExtResource("1_shader")
-shader_parameter/show_waste = 1.0
+shader_parameter/camera_pos = Vector2(0, 0)
+shader_parameter/camera_zoom = 1.0
 
 [node name="Main" type="Node"]
 script = ExtResource("3_main")

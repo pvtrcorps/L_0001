@@ -180,10 +180,10 @@ func _update_ubo():
 		params["dt"], params["seed"],          # float u_dt, u_seed
 		# Kernel parameters
 		params["R"],                           # float u_R
-		0.0, 0.0, params["identity_thr"],      # Removed repulsion/damage
+		0.0, 0.0, 0.0,                         # Padding (Removed repulsion/damage/id_thr)
 		# Evolution
-		0.0,                                   # Removed mutation_rate
-		0.0,                                   # Removed base_decay
+		0.0,                                   # Padding (Removed mutation_rate)
+		0.0,                                   # Padding (Removed base_decay)
 		# Initialization  
 		params["init_clusters"],               # float u_init_clusters
 		params["init_density"],                # float u_init_density

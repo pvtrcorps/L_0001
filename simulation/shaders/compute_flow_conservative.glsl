@@ -8,11 +8,11 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_dt;
     float u_seed;
     float u_R;
-    float u_repulsion_strength;
-    float u_combat_damage;
-    float u_identity_thr;
-    float u_mutation_rate;
-    float u_base_decay;
+    float _pad1; // repulsion
+    float _pad2; // damage
+    float _pad3; // identity_thr
+    float _pad4; // mutation_rate
+    float _pad5; // base_decay
     float u_init_clusters;
     float u_init_density;
     float u_colonize_thr;
@@ -26,7 +26,7 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_signal_decay;
     vec2 u_range_secretion;
     vec2 u_range_perception;
-    float _pad;
+    float _pad_end;
 } p;
 
 layout(set = 0, binding = 1) uniform sampler2D tex_state;
@@ -56,6 +56,16 @@ float pack2(float a, float b) {
 }
 
 const float MASS_SCALE = 100000.0; 
+
+// Stochastic Rounding to preserve mass statistically
+uint get_rounded_amount(float amount, vec2 seed) {
+    uint i = uint(amount);
+    float f = fract(amount);
+    if (hash(seed) < f) {
+        i += 1u;
+    }
+    return i;
+}
 
 void main() {
     ivec2 uv_i = ivec2(gl_GlobalInvocationID.xy);
@@ -123,41 +133,53 @@ void main() {
         
         uint m_int = uint(survivingMass * MASS_SCALE);
         ivec2 res = ivec2(p.u_res);
+        float f_m = float(m_int);
         
         ivec2 p00 = (tl + res) % res; 
-        if (w00 > 0.0) imageAtomicAdd(img_mass_accum, p00, uint(float(m_int) * w00));
+        if (w00 > 0.0) imageAtomicAdd(img_mass_accum, p00, get_rounded_amount(f_m * w00, uv + vec2(0.1, p.u_dt)));
         
         ivec2 p10 = (ivec2(tl.x+1, tl.y) + res) % res;
-        if (w10 > 0.0) imageAtomicAdd(img_mass_accum, p10, uint(float(m_int) * w10));
+        if (w10 > 0.0) imageAtomicAdd(img_mass_accum, p10, get_rounded_amount(f_m * w10, uv + vec2(0.2, p.u_dt)));
         
         ivec2 p01 = (ivec2(tl.x, tl.y+1) + res) % res;
-        if (w01 > 0.0) imageAtomicAdd(img_mass_accum, p01, uint(float(m_int) * w01));
+        if (w01 > 0.0) imageAtomicAdd(img_mass_accum, p01, get_rounded_amount(f_m * w01, uv + vec2(0.3, p.u_dt)));
         
         ivec2 p11 = (ivec2(tl.x+1, tl.y+1) + res) % res;
-        if (w11 > 0.0) imageAtomicAdd(img_mass_accum, p11, uint(float(m_int) * w11));
+        if (w11 > 0.0) imageAtomicAdd(img_mass_accum, p11, get_rounded_amount(f_m * w11, uv + vec2(0.4, p.u_dt)));
     }
     
-    // === DISCRETE GENOME ADVECTION (Winner-Takes-All PUSH) ===
-    // We don't write to img_new_genome here anymore. 
-    // Instead, we use img_winner_tracker to find the "winner" at targetUV.
+    // === DISCRETE GENOME ADVECTION (High-Precision ArgMax) ===
+    // "Softmax Sampling" limit (Temperature -> 0): The source with the highest mass contribution 
+    // determines the new identity. We use atomicMax to find the winner.
     if (survivingMass > 0.0) {
         ivec2 tl = ivec2(floor(targetPx));
         vec2 f = fract(targetPx);
         ivec2 res = ivec2(p.u_res);
         
-        // My unique identifier (1D index)
+        // My unique identifier (1D index) - Max 1024x1024 = 1,048,576 (Needs 20 bits)
         uint my_idx = uint(uv_i.y * res.x + uv_i.x);
         
-        // Pack (8-bit mass, 24-bit index)
-        // We use 8 bits for mass because we just need to compare who is bigger.
-        uint p_mass = uint(clamp(survivingMass * 255.0, 0.0, 255.0));
-        uint packed = (p_mass << 24) | (my_idx & 0xFFFFFFu);
+        // Pack (12-bit Mass, 20-bit Index)
+        // 12 bits = 0..4095. Scale mass appropriately.
+        // Assuming max mass per packet is < 1.0 (usually much less due to splitting).
+        // Using a non-linear scale (sqrt) or just high gain could help preserve small differences.
+        // Let's use simple linear scaling with a higher clamp.
+        
+        uint p_mass = uint(clamp(survivingMass * 4095.0, 0.0, 4095.0));
+        
+        // Packed Layout: [Mass (12b from 31..20)] [Index (20b from 19..0)]
+        uint packed = (p_mass << 20) | (my_idx & 0xFFFFFFu); // 0xFFFFF is 20 bits, strictly it should be 0xFFFFF
 
+        // NOTE: atomicMax compares the whole uint. 
+        // Higher mass (MSB) wins. Loops/Ties broken by Index (LSB).
+        
         if ((1.0-f.x)*(1.0-f.y) > 0.0) imageAtomicMax(img_winner_tracker, (tl + res) % res, packed);
         if (f.x*(1.0-f.y) > 0.0)       imageAtomicMax(img_winner_tracker, (ivec2(tl.x+1, tl.y) + res) % res, packed);
         if ((1.0-f.x)*f.y > 0.0)       imageAtomicMax(img_winner_tracker, (ivec2(tl.x, tl.y+1) + res) % res, packed);
         if (f.x*f.y > 0.0)             imageAtomicMax(img_winner_tracker, (ivec2(tl.x+1, tl.y+1) + res) % res, packed);
     }
     
+    // Write State (Advected Mass is accumulated in img_mass_accum via atomicAdd above)
+    // We store Velocity and Age here for the next frame's "Previous State"
     imageStore(img_new_state, uv_i, vec4(0.0, totalVelocity, age + p.u_dt));
 }

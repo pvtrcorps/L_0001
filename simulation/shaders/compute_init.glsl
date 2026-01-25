@@ -8,11 +8,11 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_dt;
     float u_seed;
     float u_R;
-    float u_repulsion_strength;
-    float u_combat_damage;
-    float u_identity_thr;
-    float u_mutation_rate;
-    float u_base_decay;
+    float _pad1;
+    float _pad2;
+    float _pad3;
+    float _pad4;
+    float _pad5;
     float u_init_clusters;
     float u_init_density;
     float u_colonize_thr;
@@ -26,7 +26,7 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_signal_decay;
     vec2 u_range_secretion;
     vec2 u_range_perception;
-    float _pad;
+    float _pad_end;
 } p;
 
 layout(set = 0, binding = 1, rgba32f) uniform image2D img_state;
@@ -83,5 +83,8 @@ void main() {
     );
     
     imageStore(img_state, uv_i, vec4(density, 0.0, 0.0, 0.0));
-    imageStore(img_genome, uv_i, (density > 0.01) ? packedGenome : vec4(0.0));
+    imageStore(img_state, uv_i, vec4(density, 0.0, 0.0, 0.0));
+    // Write genome everywhere in the cluster to prevent "Void Border" artifacts
+    // when using bilinear sampling for mass but nearest for genome.
+    imageStore(img_genome, uv_i, packedGenome);
 }

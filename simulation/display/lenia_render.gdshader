@@ -22,6 +22,32 @@ vec2 unpack2(float packed) {
     return vec2(a, b);
 }
 
+// Helper to get color from a specific integer grid coordinate
+vec3 get_pixel_color(ivec2 coords, vec2 tex_size) {
+    // Clamp coordinates
+    coords = clamp(coords, ivec2(0), ivec2(tex_size) - 1);
+    vec2 uv = (vec2(coords) + 0.5) / tex_size;
+    
+    vec4 genome = texture(tex_genome, uv);
+    
+    // Decode genes
+    vec2 mu_sigma = unpack2(genome.r);
+    float g_mu = mu_sigma.x;
+    float g_sigma = mu_sigma.y;
+    
+    vec2 affinity_lambda = unpack2(genome.b);
+    float g_affinity = affinity_lambda.x;
+    
+    // Color mapping logic (same as before)
+    float hue = g_mu + g_affinity * 0.15;
+    float saturation = 0.5 + g_sigma * 0.5;
+    // Note: We don't multiply by mass here, we just want the base species color.
+    // Brightness/Alpha will be handled by the interpolated mass later.
+    float val = 1.0; 
+    
+    return hsv2rgb(vec3(hue, saturation, val));
+}
+
 void fragment() {
     // Calculate aspect ratio correction
     vec2 resolution = 1.0 / SCREEN_PIXEL_SIZE;
@@ -43,32 +69,34 @@ void fragment() {
     uv += camera_pos;
     uv += 0.5;
     
-    // Darken out-of-bounds areas
+    // Vignette
     float vignette = 1.0;
     if(uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
         vignette = 0.1;
     }
     
     vec4 state = texture(tex_state, uv);
-    vec4 genome = texture(tex_genome, uv);
+    float mass = state.r;
     float signal = texture(tex_signal, uv).r;
     
-    float mass = state.r;
+    // Manual Bilinear Interpolation for Genome Color
+    vec2 tex_size = vec2(textureSize(tex_genome, 0));
+    vec2 pixel_pos = uv * tex_size - 0.5;
+    ivec2 i_pos = ivec2(floor(pixel_pos));
+    vec2 f_pos = fract(pixel_pos);
     
-    // Decode genes for visualization (Updated for 8-gene packing)
-    vec2 mu_sigma = unpack2(genome.r);
-    float g_mu = mu_sigma.x;
-    float g_sigma = mu_sigma.y;
+    vec3 c00 = get_pixel_color(i_pos, tex_size);
+    vec3 c10 = get_pixel_color(i_pos + ivec2(1, 0), tex_size);
+    vec3 c01 = get_pixel_color(i_pos + ivec2(0, 1), tex_size);
+    vec3 c11 = get_pixel_color(i_pos + ivec2(1, 1), tex_size);
     
-    vec2 affinity_lambda = unpack2(genome.b);
-    float g_affinity = affinity_lambda.x;
+    vec3 top = mix(c00, c10, f_pos.x);
+    vec3 bottom = mix(c01, c11, f_pos.x);
+    vec3 col_base = mix(top, bottom, f_pos.y);
     
-    // Color mapping
-    float hue = g_mu + g_affinity * 0.15;
-    float saturation = 0.5 + g_sigma * 0.5;
-    float brightness = mass * 5.0; // Boosted brightness
-    
-    vec3 col = hsv2rgb(vec3(hue, saturation, clamp(brightness, 0.0, 1.0)));
+    // Apply Mass and Brightness
+    float brightness = mass * 5.0; 
+    vec3 col = col_base * clamp(brightness, 0.0, 1.0);
     col *= smoothstep(0.0, 0.05, mass);
     
     // Signal layer visualization (Subtle Purple/Cyan Glow)
@@ -76,6 +104,14 @@ void fragment() {
     col += signal_col;
     
     // Highlight Logic
+    // Re-sample central genome for selection logic (Nearest Neighbor)
+    vec4 genome = texture(tex_genome, uv);
+    vec2 mu_sigma = unpack2(genome.r);
+    float g_mu = mu_sigma.x;
+    float g_sigma = mu_sigma.y;
+    vec2 affinity_lambda = unpack2(genome.b);
+    float g_affinity = affinity_lambda.x;
+
     if (u_show_select) {
         vec2 radius_flow = unpack2(genome.g);
         float g_radius = radius_flow.x;

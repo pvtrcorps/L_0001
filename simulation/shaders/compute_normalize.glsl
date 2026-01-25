@@ -8,11 +8,11 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_dt;
     float u_seed;
     float u_R;
-    float u_repulsion_strength;
-    float u_combat_damage;
-    float u_identity_thr;
-    float u_mutation_rate;
-    float u_base_decay;
+    float _pad1;
+    float _pad2;
+    float _pad3;
+    float _pad4;
+    float _pad5;
     float u_init_clusters;
     float u_init_density;
     float u_colonize_thr;
@@ -26,7 +26,7 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_signal_decay;
     vec2 u_range_secretion;
     vec2 u_range_perception;
-    float _pad;
+    float _pad_end;
 } p;
 
 layout(set = 0, binding = 1, r32ui) uniform uimage2D img_mass_accum;
@@ -72,14 +72,15 @@ void main() {
     
     vec4 finalGenome = texture(tex_old_genome, uv); // Preserve by default if possible
     if (packed != 0) {
-        uint winner_idx = packed & 0xFFFFFFu;
+        // Unpack Lower 20 bits for Index (2^20 = 1,048,576, enough for 1024x1024)
+        uint winner_idx = packed & 0xFFFFF; 
         ivec2 res = ivec2(p.u_res);
         ivec2 winner_coords = ivec2(winner_idx % res.x, winner_idx / res.x);
         vec2 winner_uv = (vec2(winner_coords) + 0.5) / p.u_res;
         finalGenome = texture(tex_old_genome, winner_uv);
-    } else if (mass < 0.001) {
-        finalGenome = vec4(0.0); // Only clear if no mass
     }
+    // Removed "Clear on Low Mass" logic to prevent visual artifacts at edges.
+    // The genome persists even if mass is zero ("trace").
     
     imageStore(img_new_genome, uv_i, finalGenome);
     
@@ -91,8 +92,8 @@ void main() {
     // 4. Finalization
     float finalMass = mass;
     
-    // Cleanup Dust (Optional, but helps keep simulation clean)
-    if (finalMass < 0.001) finalMass = 0.0;
+    // Cleanup Dust (Disabled for strict mass conservation)
+    // if (finalMass < 0.001) finalMass = 0.0;
     
     // 5. Secretion (Optional signaling component)
     if (finalMass > 0.05) {

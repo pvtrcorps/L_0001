@@ -8,11 +8,11 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_dt;
     float u_seed;
     float u_R;
-    float u_repulsion_strength;
-    float u_combat_damage;
-    float u_identity_thr;
-    float u_mutation_rate;
-    float u_base_decay;
+    float _pad1;
+    float _pad2;
+    float _pad3;
+    float _pad4;
+    float _pad5;
     float u_init_clusters;
     float u_init_density;
     float u_colonize_thr;
@@ -26,7 +26,7 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_signal_decay;
     vec2 u_range_secretion;
     vec2 u_range_perception;
-    float _pad;
+    float _pad_end;
 } p;
 
 layout(set = 0, binding = 1) uniform sampler2D tex_state;

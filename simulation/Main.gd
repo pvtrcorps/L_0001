@@ -21,19 +21,9 @@ var ui_schema = {
 	"Kernel Geometry": [
 		["R", "Kernel Base Radius (R)", 8.0, 30.0, 1.0]
 	],
-	"God Mode (Physics)": [
-		["repulsion", "Repulsion Force", 0.0, 20.0, 0.5],
-		["damage", "Combat Damage", 0.0, 10.0, 0.1],
-		["identity_thr", "Identity Threshold", 0.0, 1.0, 0.01],
-		["colonize_thr", "Colonization Thr (Defense)", 0.0, 0.5, 0.01]
-	],
 	"Chemical Signal": [
 		["signal_diff", "Diffusion Rate", 0.0, 10.0, 0.1],
 		["signal_decay", "Decay Rate", 0.0, 1.0, 0.01]
-	],
-	"Evolution": [
-		["mutation_rate", "Mutation Rate", 0.0, 0.2, 0.005],
-		["base_decay", "Base Decay", 0.0, 0.1, 0.005]
 	],
 	"Gene Pools (Init)": [
 		["g_mu_min", "Mu Min (Archetype)", 0.0, 1.0, 0.05],

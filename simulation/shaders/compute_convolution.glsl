@@ -8,9 +8,9 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_dt;
     float u_seed;
     float u_R;
-    float _pad1;
-    float _pad2;
-    float _pad3;
+    float u_theta_A; // Previously _pad1
+    float u_alpha_n; // Previously _pad2
+    float u_temperature; // Temperature (s)
     float _pad4;
     float _pad5;
     float u_init_clusters;
@@ -103,8 +103,13 @@ void main() {
             
             float w = kernel(r, g_mu, g_sigma, g_radius, g_affinity);
             if (w > 0.0) {
-                vec2 sampleUV = uv + offset / p.u_res;
-                float neighborMass = texture(tex_state, sampleUV).r;
+            if (w > 0.0) {
+                // Precise Integer Sampling to avoid sub-pixel drift
+                ivec2 res_i = ivec2(p.u_res);
+                ivec2 neighbor_coord = (uv_i + ivec2(dx, dy) + res_i) % res_i; // True Torus Wrap
+                
+                // Use texelFetch instead of texture(linear)
+                float neighborMass = texelFetch(tex_state, neighbor_coord, 0).r;
                 
                 sum += neighborMass * w;
                 totalWeight += w;
@@ -113,6 +118,7 @@ void main() {
                     vec2 dir = offset / r;
                     weightedGradient += dir * neighborMass * w;
                 }
+            }
             }
         }
     }

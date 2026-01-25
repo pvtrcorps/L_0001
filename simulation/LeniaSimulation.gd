@@ -3,7 +3,7 @@ extends Node
 signal stats_updated(total_mass, population, histograms)
 signal species_list_updated(species_list)
 signal species_hovered(info) # New signal
-const SpeciesTracker = preload("res://simulation/SpeciesTracker.gd")
+# SpeciesTracker is a global class
 var tracker = SpeciesTracker.new()
 
 
@@ -21,6 +21,7 @@ var params = {
 	"init_density": 0.5,   # Higher density for better start
 	
 	# Advanced Physics (Flow Lenia style)
+	"temperature": 0.65,   # Advection diffusion (s). Paper default: 0.65
 	"identity_thr": 0.2,   # Difference to be considered enemy (used in localized kernel if implemented)
 	"colonize_thr": 0.15,  # Mass needed to resist invasion
 	
@@ -36,7 +37,11 @@ var params = {
 	"g_affinity_min": 0.0, "g_affinity_max": 1.0,
 	"g_lambda_min": 0.0, "g_lambda_max": 1.0,
 	"g_secretion_min": 0.0, "g_secretion_max": 1.0,
-	"g_perception_min": 0.0, "g_perception_max": 1.0
+	"g_perception_min": 0.0, "g_perception_max": 1.0,
+	
+	# Pressure / Density Control (Eq 5)
+	"theta_A": 2.0,       # Critical Mass (Repulsion kicks in above this)
+	"alpha_n": 2.0        # Smoothness of the transition to repulsion
 }
 
 # === RENDERING DEVICE RESOURCES ===
@@ -179,8 +184,11 @@ func _update_ubo():
 		params["res_x"], params["res_y"],      # vec2 u_res
 		params["dt"], params["seed"],          # float u_dt, u_seed
 		# Kernel parameters
+		# Kernel parameters
 		params["R"],                           # float u_R
-		0.0, 0.0, 0.0,                         # Padding (Removed repulsion/damage/id_thr)
+		params["theta_A"],                     # Repurposed _pad1 (Critical Mass)
+		params["alpha_n"],                     # Repurposed _pad2 (Alpha Exponent)
+		params["temperature"],                 # float u_temperature (was _pad3)
 		# Evolution
 		0.0,                                   # Padding (Removed mutation_rate)
 		0.0,                                   # Padding (Removed base_decay)
@@ -230,7 +238,7 @@ func _dispatch_step():
 	rd.compute_list_dispatch(compute_list_signal, wg_x, wg_y, 1)
 	rd.compute_list_end()
 	
-	rd.barrier(RenderingDevice.BARRIER_MASK_COMPUTE)
+	# rd.barrier(RenderingDevice.BARRIER_MASK_COMPUTE) # barrier automatically inserted
 	
 	# 2. Convolution Pass
 	var key_conv = "conv_" + str(ping_pong)
@@ -258,7 +266,7 @@ func _dispatch_step():
 	rd.compute_list_dispatch(compute_list_flow, wg_x, wg_y, 1)
 	rd.compute_list_end()
 	
-	rd.barrier(RenderingDevice.BARRIER_MASK_COMPUTE)
+	# rd.barrier(RenderingDevice.BARRIER_MASK_COMPUTE) # barrier automatically inserted
 	
 	# 4. Normalize Pass
 	var key_norm = "norm_" + str(ping_pong)
@@ -332,7 +340,7 @@ func _dispatch_init():
 	rd.texture_clear(tex_signal_b, Color(0,0,0,0), 0, 1, 0, 1)
 	rd.texture_clear(tex_winner_tracker, Color(0,0,0,0), 0, 1, 0, 1)
 	
-	rd.barrier(RenderingDevice.BARRIER_MASK_COMPUTE)
+	# rd.barrier(RenderingDevice.BARRIER_MASK_COMPUTE) # barrier automatically inserted
 	ping_pong = false
 
 func _create_uniforms():
@@ -757,14 +765,14 @@ func clear_simulation():
 	rd.texture_clear(tex_genome_b, Color(0,0,0,0), 0, 1, 0, 1)
 	rd.texture_clear(tex_signal_a, Color(0,0,0,0), 0, 1, 0, 1)
 	rd.texture_clear(tex_signal_b, Color(0,0,0,0), 0, 1, 0, 1)
-	rd.barrier(RenderingDevice.BARRIER_MASK_COMPUTE)
+	# rd.barrier(RenderingDevice.BARRIER_MASK_COMPUTE) # barrier automatically inserted
 
-func set_parameter(name: String, value: float):
-	if params.has(name):
-		params[name] = value
+func set_parameter(param_name: String, value: float):
+	if params.has(param_name):
+		params[param_name] = value
 
-func get_parameter(name: String) -> float:
-	return params.get(name, 0.0)
+func get_parameter(param_name: String) -> float:
+	return params.get(param_name, 0.0)
 
 func set_highlight_genes(genes: Dictionary, active: bool):
 	if display_material:
@@ -782,7 +790,7 @@ func get_species_info_at(uv: Vector2) -> Dictionary:
 	if gx < 0 or gx >= 64 or gy < 0 or gy >= 64: return {}
 	
 	var idx = (gy * 64 + gx) * 10 # 10 floats per cell
-	if idx + 8 >= last_analysis_bytes.size() / 4: return {} 
+	if (idx + 8) * 4 >= last_analysis_bytes.size(): return {} 
 	
 	var floats = last_analysis_bytes.to_float32_array()
 	var base = idx
@@ -795,14 +803,14 @@ func get_species_info_at(uv: Vector2) -> Dictionary:
 	var rad = floats[base+3]
 	var flow = floats[base+4]
 	var aff = floats[base+5]
-	var lam = floats[base+6]
+	var den = floats[base+6] # Was lambda
 	var sec = floats[base+7]
 	var per = floats[base+8]
 	
 	var info = {
 		"mu": mu, "sigma": sig,
 		"radius": rad, "flow": flow,
-		"affinity": aff, "lambda": lam,
+		"affinity": aff, "density_tol": den,
 		"secretion": sec, "perception": per,
 		"mass": m
 	}
@@ -815,8 +823,13 @@ func get_species_info_at(uv: Vector2) -> Dictionary:
 			info["color"] = s.color
 			return info
 			
-	info["id"] = "?"
-	info["name"] = "Unknown"
+	# If no match, generate a name on the fly for this "Wild" mutant
+	var dummy_species = SpeciesTracker.Species.new()
+	dummy_species.genes = info
+	dummy_species._generate_name()
+	
+	info["id"] = "Wild"
+	info["name"] = dummy_species.name
 	return info
 
 # === INPUT HANDLING ===

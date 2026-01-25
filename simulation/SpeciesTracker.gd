@@ -15,7 +15,7 @@ class Species:
 	# Genetic Centroid (Running Average)
 	var genes_sum = {
 		"mu": 0.0, "sigma": 0.0, "radius": 0.0, 
-		"flow": 0.0, "affinity": 0.0, "lambda": 0.0,
+		"flow": 0.0, "affinity": 0.0, "density_tol": 0.0,
 		"secretion": 0.0, "perception": 0.0
 	}
 	
@@ -24,7 +24,7 @@ class Species:
 	var color: Color
 	var name: String = "Unknown"
 	
-	func add_sample(mu, sig, rad, flow, aff, lam, sec, per, m):
+	func add_sample(mu, sig, rad, flow, aff, den, sec, per, m):
 		area += 1
 		mass += m
 		genes_sum["mu"] += mu
@@ -32,7 +32,7 @@ class Species:
 		genes_sum["radius"] += rad
 		genes_sum["flow"] += flow
 		genes_sum["affinity"] += aff
-		genes_sum["lambda"] += lam
+		genes_sum["density_tol"] += den
 		genes_sum["secretion"] += sec
 		genes_sum["perception"] += per
 		
@@ -45,7 +45,7 @@ class Species:
 			"radius": genes_sum["radius"] / n,
 			"flow": genes_sum["flow"] / n,
 			"affinity": genes_sum["affinity"] / n,
-			"lambda": genes_sum["lambda"] / n,
+			"density_tol": genes_sum["density_tol"] / n,
 			"secretion": genes_sum["secretion"] / n,
 			"perception": genes_sum["perception"] / n
 		}
@@ -60,38 +60,43 @@ class Species:
 
 	func _generate_name():
 		var mu = genes["mu"]
-		var sig = genes["sigma"]
-		var per = genes["perception"]
+		var flow = genes["flow"]
+		var den = genes["density_tol"]
 		var sec = genes["secretion"]
 		var rad = genes["radius"]
-		var aff = genes["affinity"]
 		
-		var prefix = ""
-		if mu < 0.3: prefix = "Globus"
-		elif mu < 0.6: prefix = "Amorph"
-		else: prefix = "Vermes"
+		# 1. Morphology (Mu/Archetype) - The Noun
+		var noun = "Proto"
+		if mu < 0.2: noun = "Globus"      # Blob
+		elif mu < 0.4: noun = "Amorph"    # Shapeless
+		elif mu < 0.6: noun = "Vermes"    # Worm
+		elif mu < 0.8: noun = "Cellula"   # Cell
+		else: noun = "Structura"          # Structure
 		
-		# Adding size-based adjectives
-		var size = ""
-		if rad < 0.3: size = " Parvus"
-		elif rad > 0.7: size = " Gigas"
+		# 2. Density/Matter (DensityTol) - The Texture Adjective
+		var texture = ""
+		if den < 0.3: texture = " Nebulae"    # Gas/Mist
+		elif den < 0.6: texture = " Flexus"   # Flexible
+		elif den < 0.8: texture = " Solidus"  # Solid
+		else: texture = " Durus"              # Hard/Rock
 		
-		var suffix = ""
-		if sig < 0.3: suffix = " Solidus"
-		elif sig < 0.6: suffix = " Varius"
-		else: suffix = " Nebula"
+		# 3. Mobility (Flow) - The Prefix/Suffix
+		var motion = ""
+		if flow > 0.7: motion = "Velox "      # Fast
+		elif flow < 0.2: motion = "Pigra "    # Lazy/Slow
 		
-		# Armor/Social based suffix
-		var type = ""
-		if aff < 0.2: type = " Nudus"
-		elif aff > 0.8: type = " Crustatus"
+		# 4. Abilities (Secretion/Perception) - Honorifics
+		var ability = ""
+		if sec > 0.6: ability = " Chemicus"
+		if genes["perception"] > 0.6: ability = " Sapiens"
+		if sec > 0.6 and genes["perception"] > 0.6: ability = " Hive"
 		
-		var behavior = ""
-		if sec > 0.6: behavior = " Pheromo"
-		if per > 0.6: behavior = " Sensus"
-		if sec > 0.6 and per > 0.6: behavior = " Socialis"
+		# 5. Size (Radius)
+		var size_tag = ""
+		if rad > 0.8: size_tag = " Titan"
+		if rad < 0.2: size_tag = " Micro"
 		
-		name = prefix + size + suffix + type + behavior
+		name = motion + noun + texture + ability + size_tag
 
 # Optimized weighted distance
 static func get_fast_dist(g1: PackedFloat32Array, g2: PackedFloat32Array) -> float:
@@ -150,7 +155,7 @@ func find_species(byte_data: PackedByteArray) -> Array:
 		elif species_list.size() < 64: # Hard cap on species count
 			var s = Species.new()
 			s.id = species_list.size() + 1
-			s.genes = { "mu": cg[0], "sigma": cg[1], "radius": cg[2], "flow": cg[3], "affinity": cg[4], "lambda": cg[5], "secretion": cg[6], "perception": cg[7] }
+			s.genes = { "mu": cg[0], "sigma": cg[1], "radius": cg[2], "flow": cg[3], "affinity": cg[4], "density_tol": cg[5], "secretion": cg[6], "perception": cg[7] }
 			s.add_sample(cg[0], cg[1], cg[2], cg[3], cg[4], cg[5], cg[6], cg[7], m)
 			species_list.append(s)
 			species_genes.append(cg)

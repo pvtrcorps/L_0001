@@ -1,6 +1,6 @@
 extends Control
 
-var gene_names = ["Mu", "Sigma", "Radius", "Flow", "Affinity", "Lambda", "Secret", "Sensus"]
+var gene_names = ["Archetype", "Stability", "Effect Rad", "Mobility", "Cohesion", "DensityTol", "Secretion", "Sensus"]
 # Colors matching the visualization shader logic roughly
 var gene_colors = [
 	Color(1.0, 0.2, 0.2), # Mu - Red

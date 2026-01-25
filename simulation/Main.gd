@@ -21,23 +21,32 @@ var ui_schema = {
 	"Kernel Geometry": [
 		["R", "Kernel Base Radius (R)", 8.0, 30.0, 1.0]
 	],
+	"Flow Physics": [
+		["temperature", "Temperature (s)", 0.0, 3.0, 0.05],
+		["theta_A", "Global Density Mult", 0.1, 5.0, 0.1],
+		["alpha_n", "Repulsion Sharpness (n)", 1.0, 8.0, 0.1]
+	],
 	"Chemical Signal": [
 		["signal_diff", "Diffusion Rate", 0.0, 10.0, 0.1],
 		["signal_decay", "Decay Rate", 0.0, 1.0, 0.01]
 	],
 	"Gene Pools (Init)": [
-		["g_mu_min", "Mu Min (Archetype)", 0.0, 1.0, 0.05],
-		["g_mu_max", "Mu Max", 0.0, 1.0, 0.05],
-		["g_sigma_min", "Sigma Min (Stability)", 0.0, 1.0, 0.05],
-		["g_sigma_max", "Sigma Max", 0.0, 1.0, 0.05],
-		["g_radius_min", "Radius Min", 0.0, 1.0, 0.05],
-		["g_radius_max", "Radius Max", 0.0, 1.0, 0.05],
-		["g_flow_min", "Flow Min", 0.0, 1.0, 0.05],
-		["g_flow_max", "Flow Max", 0.0, 1.0, 0.05],
+		["g_mu_min", "Archetype (Mu) Min", 0.0, 1.0, 0.05],
+		["g_mu_max", "Archetype (Mu) Max", 0.0, 1.0, 0.05],
+		["g_sigma_min", "Stability (Sigma) Min", 0.0, 1.0, 0.05],
+		["g_sigma_max", "Stability (Sigma) Max", 0.0, 1.0, 0.05],
+		["g_radius_min", "Effect Radius Min", 0.0, 1.0, 0.05],
+		["g_radius_max", "Effect Radius Max", 0.0, 1.0, 0.05],
+		["g_flow_min", "Mobility (Flow) Min", 0.0, 1.0, 0.05],
+		["g_flow_max", "Mobility (Flow) Max", 0.0, 1.0, 0.05],
+		["g_affinity_min", "Cohesion (Affinity) Min", 0.0, 1.0, 0.05],
+		["g_affinity_max", "Cohesion (Affinity) Max", 0.0, 1.0, 0.05],
+		["g_lambda_min", "DensityTol (Lambda) Min", 0.0, 1.0, 0.05],
+		["g_lambda_max", "DensityTol (Lambda) Max", 0.0, 1.0, 0.05],
 		["g_secretion_min", "Secretion Min", 0.0, 1.0, 0.05],
 		["g_secretion_max", "Secretion Max", 0.0, 1.0, 0.05],
-		["g_perception_min", "Sensus Min", 0.0, 1.0, 0.05],
-		["g_perception_max", "Sensus Max", 0.0, 1.0, 0.05]
+		["g_perception_min", "Sensus (Perception) Min", 0.0, 1.0, 0.05],
+		["g_perception_max", "Sensus (Perception) Max", 0.0, 1.0, 0.05]
 	]
 }
 
@@ -95,6 +104,37 @@ func _build_ui():
 	ui_container.add_child(stats_box)
 	ui_container.add_child(HSeparator.new())
 	
+	# Tooltips for parameters
+	var tooltips = {
+		"dt": "Time step integration delta. Lower values provide more accurate physics but slower simulation speed.",
+		"init_density": "Density of the initial random noise. Higher values mean more starting matter.",
+		"init_clusters": "Number of random initialization clusters placed on the grid.",
+		"R": "Kernel Radius. The size of the sensing neighborhood for each cell.",
+		"temperature": "Physics temperature. Controls the rate of diffusion/advection in the flow simulation.",
+		"theta_A": "Critical Mass (Alpha). The density threshold where repulsion forces begin to dominate.",
+		"alpha_n": "Repulsion Sharpness. Controls how abruptly the repulsion force kicks in.",
+		"signal_diff": "Diffusion Rate. How fast the chemical signal spreads to neighboring cells.",
+		"signal_decay": "Decay Rate. How fast the chemical signal dissipates over time.",
+		
+		# Genes
+		"g_mu_min": "Archetype (Mu) Minimum. Optimal density for growth.",
+		"g_mu_max": "Archetype (Mu) Maximum.",
+		"g_sigma_min": "Stability (Sigma) Minimum. Tolerance range around the optimal density.",
+		"g_sigma_max": "Stability (Sigma) Maximum.",
+		"g_radius_min": "Effect Radius Minimum. Relative size of the creature's influence.",
+		"g_radius_max": "Effect Radius Maximum.",
+		"g_flow_min": "Mobility (Flow) Minimum. How fast the creature can move/flow.",
+		"g_flow_max": "Mobility (Flow) Maximum.",
+		"g_affinity_min": "Cohesion (Affinity) Minimum. Attraction strength to own species.",
+		"g_affinity_max": "Cohesion (Affinity) Maximum.",
+		"g_lambda_min": "Density Tolerance (Lambda) Minimum. Width of the growth function.",
+		"g_lambda_max": "Density Tolerance (Lambda) Maximum.",
+		"g_secretion_min": "Secretion Minimum. Amount of chemical signal produced.",
+		"g_secretion_max": "Secretion Maximum.",
+		"g_perception_min": "Sensus (Perception) Minimum. Sensitivity to the chemical signal.",
+		"g_perception_max": "Sensus (Perception) Maximum."
+	}
+	
 	# Parameter sliders
 	for group in ui_schema:
 		var header = Label.new()
@@ -137,6 +177,13 @@ func _build_ui():
 			slider.value = initial_val
 			slider.size_flags_vertical = Control.SIZE_EXPAND_FILL
 			
+			# Apply Tooltips
+			if tooltips.has(key):
+				var tt = tooltips[key]
+				label.tooltip_text = tt
+				val_label.tooltip_text = tt
+				slider.tooltip_text = tt
+			
 			# Connect using the new API
 			slider.value_changed.connect(func(v): 
 				sim.set_parameter(key, v)
@@ -155,6 +202,7 @@ func _build_ui():
 	
 	var btn_pause = Button.new()
 	btn_pause.text = "PAUSE"
+	btn_pause.tooltip_text = "Pause or Resume the simulation."
 	btn_pause.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	btn_pause.pressed.connect(func(): 
 		sim.paused = !sim.paused
@@ -164,12 +212,14 @@ func _build_ui():
 
 	var btn_reset = Button.new()
 	btn_reset.text = "RESET"
+	btn_reset.tooltip_text = "Reset the simulation with new random seed."
 	btn_reset.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	btn_reset.pressed.connect(func(): sim.reset_simulation())
 	btn_row.add_child(btn_reset)
 	
 	var btn_clear = Button.new()
 	btn_clear.text = "CLEAR"
+	btn_clear.tooltip_text = "Clear the simulation grid (remove all life)."
 	btn_clear.pressed.connect(func(): sim.clear_simulation())
 	ui_container.add_child(btn_clear)
 
@@ -213,8 +263,10 @@ func _on_species_hovered(info):
 			txt += "Mass: %d\n" % int(info.get("mass", 0) * 1000)
 			txt += "Archetype: %.2f\n" % info.get("mu", 0.0)
 			txt += "Stability: %.2f\n" % info.get("sigma", 0.0)
-			txt += "Cohesion: %.2f\n" % info.get("affinity", 0.0)
+			txt += "Effect Radius: %.2f\n" % info.get("radius", 0.0)
 			txt += "Mobility: %.2f\n" % info.get("flow", 0.0)
+			txt += "Cohesion: %.2f\n" % info.get("affinity", 0.0)
+			txt += "DensityTol: %.2f\n" % info.get("density_tol", 0.0)
 			txt += "Secretion: %.2f\n" % info.get("secretion", 0.0)
 			txt += "Sensus: %.2f" % info.get("perception", 0.0)
 			

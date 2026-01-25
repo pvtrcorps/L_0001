@@ -8,9 +8,9 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_dt;
     float u_seed;
     float u_R;
-    float _pad1;
-    float _pad2;
-    float _pad3;
+    float u_theta_A;
+    float u_alpha_n;
+    float u_temperature;
     float _pad4;
     float _pad5;
     float u_init_clusters;
@@ -42,6 +42,13 @@ const float MASS_SCALE = 100000.0;
 // 100% Flow Lenia: No additive growth.
 // Final mass is strictly determined by advection.
 
+// PCG Hash (1d)
+uint pcg_hash_1d(uint v) {
+    uint state = v * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
 vec2 unpack2(float packed) {
     uint bits = floatBitsToUint(packed);
     float a = float((bits >> 15u) & 0x7FFFu) / 32767.0;
@@ -72,8 +79,15 @@ void main() {
     
     vec4 finalGenome = texture(tex_old_genome, uv); // Preserve by default if possible
     if (packed != 0) {
-        // Unpack Lower 20 bits for Index (2^20 = 1,048,576, enough for 1024x1024)
-        uint winner_idx = packed & 0xFFFFF; 
+        // Unpack Lower 20 bits for Scrambled Index
+        uint scrambled_idx = packed & 0xFFFFF; 
+        
+        // Descramble using same mask as flow shader (u_seed)
+        // Ensure strictly matching hash function!
+        uint seed_bits = floatBitsToUint(p.u_seed);
+        uint frame_mask = pcg_hash_1d(seed_bits) & 0xFFFFFFu;
+        uint winner_idx = scrambled_idx ^ frame_mask;
+        
         ivec2 res = ivec2(p.u_res);
         ivec2 winner_coords = ivec2(winner_idx % res.x, winner_idx / res.x);
         vec2 winner_uv = (vec2(winner_coords) + 0.5) / p.u_res;

@@ -8,9 +8,9 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_dt;
     float u_seed;
     float u_R;
-    float _pad1;
-    float _pad2;
-    float _pad3;
+    float u_theta_A;
+    float u_alpha_n;
+    float u_temperature;
     float _pad4;
     float _pad5;
     float u_init_clusters;

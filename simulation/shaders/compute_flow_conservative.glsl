@@ -36,6 +36,7 @@ layout(set = 0, binding = 4, r32ui) uniform uimage2D img_mass_accum;
 layout(set = 0, binding = 5, rgba32f) uniform image2D img_new_state;
 layout(set = 0, binding = 6, rgba32f) uniform image2D img_new_genome;
 layout(set = 0, binding = 7) uniform sampler2D tex_signal;
+layout(set = 0, binding = 8, r32ui) uniform uimage2D img_winner_tracker;
 
 float hash(vec2 pt) {
     return fract(sin(dot(pt, vec2(12.9898, 78.233))) * 43758.5453);
@@ -79,6 +80,7 @@ void main() {
     
     vec4 potential = texture(tex_potential, uv);
     vec2 gradU = potential.gb; 
+    float g_prime = potential.a; // Growth force (G'(U))
     
     // === SIGNAL GRADIENT (Chemotaxis) ===
     vec2 signalGrad = vec2(0.0);
@@ -88,46 +90,27 @@ void main() {
     float sD = texture(tex_signal, uv + vec2(0.0, px.y)).r;
     signalGrad = vec2(sR - sL, sD - sU);
     
-    // Movement logic
-    float force_flow = 4.0 * max(0.2, g_flow); 
-    float chemotaxis_strength = (g_perception - 0.5) * 1.5; // Reduced from 10.0
+    // === FLOW LENIA VELOCITY ===
+    // v = C * G'(U) * gradU
+    // C is a global or gene-dependent scaling factor
+    float movement_scale = 10.0 * (0.5 + g_flow);
+    vec2 flowVelocity = g_prime * gradU * movement_scale;
     
-    // === REPULSION SCAN ===
-    vec2 repulsion = vec2(0.0);
-    float damage = 0.0;
+    // === AFFINITY INTERACTION ===
+    // Creatures with similar affinity attract, different affinity might repel or be neutral
+    // In strict Flow Lenia, interaction often emerges from the kernel itself, but
+    // we can add a subtle affinity-driven flux if needed.
     
-    if (myMass > 0.01) {
-        for(int y=-2; y<=2; y++) {
-            for(int x=-2; x<=2; x++) {
-                if(x==0 && y==0) continue;
-                vec2 off = vec2(float(x), float(y));
-                vec2 nUV = uv + off * px;
-                
-                vec4 nVal = texture(tex_state, nUV);
-                if (nVal.r > 0.05) {
-                    vec2 nAff_lam = unpack2(texture(tex_genome, nUV).b);
-                    float nAff = nAff_lam.x;
-                    if (abs(nAff - myAffinity) > p.u_identity_thr) {
-                        float dist = length(off);
-                        vec2 dir = off / dist;
-                        repulsion -= dir * nVal.r;
-                        damage += nVal.r * p.u_combat_damage;
-                    }
-                }
-            }
-        }
-    }
+    float chemotaxis_strength = (g_perception - 0.5) * 2.0;
     
-    vec2 totalVelocity = (gradU * force_flow) + 
-                         (repulsion * p.u_repulsion_strength) +
-                         (signalGrad * chemotaxis_strength);
+    vec2 totalVelocity = flowVelocity + (signalGrad * chemotaxis_strength);
     
     // === MASS ADVECTION (Conservative PUSH) ===
     vec2 targetUV = uv + totalVelocity * p.u_dt * px;
     vec2 targetPx = targetUV * p.u_res - 0.5; 
     
-    float survivingMass = myMass - (damage * p.u_dt) - (p.u_base_decay * p.u_dt); 
-    survivingMass = max(0.0, survivingMass);
+    // STRICT MASS CONSERVATION: No damage, no decay
+    float survivingMass = myMass; 
     
     if (survivingMass > 0.0) {
         ivec2 tl = ivec2(floor(targetPx));
@@ -154,33 +137,27 @@ void main() {
         if (w11 > 0.0) imageAtomicAdd(img_mass_accum, p11, uint(float(m_int) * w11));
     }
     
-    // === GENOME ADVECTION (Semi-Lagrangian PULL) ===
-    vec2 sourceUV = uv - totalVelocity * p.u_dt * px;
-    vec4 nextGenome = texture(tex_genome, sourceUV);
-    
-    vec4 srcGenome = nextGenome;
-    float srcAffinity = unpack2(srcGenome.b).x;
-    
-    // Identity Defense
-    if (myMass > p.u_colonize_thr) {
-        if (abs(myAffinity - srcAffinity) > p.u_identity_thr) {
-             nextGenome = myGenome;
-        }
-    }
-    
-    // Mutation (supports 8 genes naturally now)
-    if (hash(uv + vec2(p.u_seed, p.u_dt)) < p.u_mutation_rate) {
-        float drift = (hash(uv * 2.0 + p.u_seed) - 0.5) * 0.1;
+    // === DISCRETE GENOME ADVECTION (Winner-Takes-All PUSH) ===
+    // We don't write to img_new_genome here anymore. 
+    // Instead, we use img_winner_tracker to find the "winner" at targetUV.
+    if (survivingMass > 0.0) {
+        ivec2 tl = ivec2(floor(targetPx));
+        vec2 f = fract(targetPx);
+        ivec2 res = ivec2(p.u_res);
         
-        // Mutate packed channels
-        for(int i=0; i<4; i++) {
-            vec2 genes = unpack2(nextGenome[i]);
-            genes.x = clamp(genes.x + drift, 0.0, 1.0);
-            genes.y = clamp(genes.y + drift * 0.5, 0.0, 1.0);
-            nextGenome[i] = pack2(genes.x, genes.y);
-        }
+        // My unique identifier (1D index)
+        uint my_idx = uint(uv_i.y * res.x + uv_i.x);
+        
+        // Pack (8-bit mass, 24-bit index)
+        // We use 8 bits for mass because we just need to compare who is bigger.
+        uint p_mass = uint(clamp(survivingMass * 255.0, 0.0, 255.0));
+        uint packed = (p_mass << 24) | (my_idx & 0xFFFFFFu);
+
+        if ((1.0-f.x)*(1.0-f.y) > 0.0) imageAtomicMax(img_winner_tracker, (tl + res) % res, packed);
+        if (f.x*(1.0-f.y) > 0.0)       imageAtomicMax(img_winner_tracker, (ivec2(tl.x+1, tl.y) + res) % res, packed);
+        if ((1.0-f.x)*f.y > 0.0)       imageAtomicMax(img_winner_tracker, (ivec2(tl.x, tl.y+1) + res) % res, packed);
+        if (f.x*f.y > 0.0)             imageAtomicMax(img_winner_tracker, (ivec2(tl.x+1, tl.y+1) + res) % res, packed);
     }
     
-    imageStore(img_new_genome, uv_i, nextGenome);
     imageStore(img_new_state, uv_i, vec4(0.0, totalVelocity, age + p.u_dt));
 }

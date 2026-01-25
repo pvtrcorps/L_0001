@@ -16,17 +16,12 @@ var params = {
 	# Kernel shape (global - creates pattern types)
 	"R": 12.0,           # Kernel radius in pixels
 
-	# Evolution
-	"mutation_rate": 0.02,
-	"base_decay": 0.015,
 	# Initialization
 	"init_clusters": 16.0,
 	"init_density": 0.5,   # Higher density for better start
 	
-	# Advanced Physics / Combat
-	"repulsion": 8.0,      # Repulsion Force
-	"damage": 2.0,         # Combat Damage
-	"identity_thr": 0.2,   # Difference to be considered enemy
+	# Advanced Physics (Flow Lenia style)
+	"identity_thr": 0.2,   # Difference to be considered enemy (used in localized kernel if implemented)
 	"colonize_thr": 0.15,  # Mass needed to resist invasion
 	
 	# Signal Layer
@@ -70,6 +65,7 @@ var tex_genome_a: RID
 var tex_genome_b: RID
 var tex_potential: RID
 var tex_mass_accum: RID
+var tex_winner_tracker: RID # [NEW]
 var tex_signal_a: RID # [NEW]
 var tex_signal_b: RID # [NEW]
 
@@ -184,10 +180,10 @@ func _update_ubo():
 		params["dt"], params["seed"],          # float u_dt, u_seed
 		# Kernel parameters
 		params["R"],                           # float u_R
-		params["repulsion"], params["damage"], params["identity_thr"],
+		0.0, 0.0, params["identity_thr"],      # Removed repulsion/damage
 		# Evolution
-		params["mutation_rate"],               # float u_mutation_rate
-		params["base_decay"],                  # float u_base_decay
+		0.0,                                   # Removed mutation_rate
+		0.0,                                   # Removed base_decay
 		# Initialization  
 		params["init_clusters"],               # float u_init_clusters
 		params["init_density"],                # float u_init_density
@@ -268,7 +264,7 @@ func _dispatch_step():
 	var key_norm = "norm_" + str(ping_pong)
 	var set_norm = set_cache.get(key_norm)
 	if not set_norm or not set_norm.is_valid():
-		set_norm = _create_set_normalize(tex_potential, dst_genome, dst_state, dst_signal)
+		set_norm = _create_set_normalize(tex_potential, src_genome, dst_state, dst_signal, dst_genome)
 		set_cache[key_norm] = set_norm
 	
 	var compute_list_norm = rd.compute_list_begin()
@@ -334,6 +330,7 @@ func _dispatch_init():
 	rd.texture_clear(tex_genome_b, Color(0,0,0,0), 0, 1, 0, 1)
 	rd.texture_clear(tex_signal_a, Color(0,0,0,0), 0, 1, 0, 1)
 	rd.texture_clear(tex_signal_b, Color(0,0,0,0), 0, 1, 0, 1)
+	rd.texture_clear(tex_winner_tracker, Color(0,0,0,0), 0, 1, 0, 1)
 	
 	rd.barrier(RenderingDevice.BARRIER_MASK_COMPUTE)
 	ping_pong = false
@@ -416,6 +413,7 @@ func _create_textures():
 		RenderingDevice.TEXTURE_USAGE_CAN_COPY_TO_BIT
 	)
 	tex_mass_accum = rd.texture_create(fmt_atomic, RDTextureView.new())
+	tex_winner_tracker = rd.texture_create(fmt_atomic, RDTextureView.new())
 	
 	# Create Texture2DRD bridges for display
 	texture_rd_state = Texture2DRD.new()
@@ -693,9 +691,14 @@ func _create_set_flow_conservative(src_state: RID, src_genome: RID, src_sig: RID
 	u_sig.add_id(sampler_linear)
 	u_sig.add_id(src_sig)
 	
-	return rd.uniform_set_create([u_ubo, u_src_state, u_src_genome, u_pot, u_atomic, u_dst_state, u_dst_genome, u_sig], shader_flow_conservative, 0)
+	var u_winner = RDUniform.new()
+	u_winner.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	u_winner.binding = 8
+	u_winner.add_id(tex_winner_tracker)
+	
+	return rd.uniform_set_create([u_ubo, u_src_state, u_src_genome, u_pot, u_atomic, u_dst_state, u_dst_genome, u_sig, u_winner], shader_flow_conservative, 0)
 
-func _create_set_normalize(tex_pot: RID, dst_genome: RID, dst_state: RID, dst_sig: RID) -> RID:
+func _create_set_normalize(tex_pot: RID, old_genome: RID, dst_state: RID, dst_sig: RID, dst_genome: RID) -> RID:
 	var u_ubo = RDUniform.new()
 	u_ubo.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
 	u_ubo.binding = 0
@@ -712,12 +715,6 @@ func _create_set_normalize(tex_pot: RID, dst_genome: RID, dst_state: RID, dst_si
 	u_pot.add_id(sampler_linear)
 	u_pot.add_id(tex_pot)
 	
-	var u_new_genome = RDUniform.new()
-	u_new_genome.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-	u_new_genome.binding = 3
-	u_new_genome.add_id(sampler_nearest)
-	u_new_genome.add_id(dst_genome)
-	
 	var u_dst_state = RDUniform.new()
 	u_dst_state.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
 	u_dst_state.binding = 4
@@ -728,7 +725,23 @@ func _create_set_normalize(tex_pot: RID, dst_genome: RID, dst_state: RID, dst_si
 	u_dst_sig.binding = 5
 	u_dst_sig.add_id(dst_sig)
 	
-	return rd.uniform_set_create([u_ubo, u_atomic, u_pot, u_new_genome, u_dst_state, u_dst_sig], shader_normalize, 0)
+	var u_winner = RDUniform.new()
+	u_winner.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	u_winner.binding = 6
+	u_winner.add_id(tex_winner_tracker)
+	
+	var u_new_genome = RDUniform.new()
+	u_new_genome.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	u_new_genome.binding = 7
+	u_new_genome.add_id(dst_genome)
+	
+	var u_old_genome = RDUniform.new()
+	u_old_genome.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	u_old_genome.binding = 8
+	u_old_genome.add_id(sampler_nearest)
+	u_old_genome.add_id(old_genome)
+	
+	return rd.uniform_set_create([u_ubo, u_atomic, u_pot, u_dst_state, u_dst_sig, u_winner, u_new_genome, u_old_genome], shader_normalize, 0)
 
 # === PUBLIC API ===
 

@@ -119,11 +119,17 @@ void main() {
     
     float U = (totalWeight > 0.0) ? sum / totalWeight : 0.0;
     
-    // Signal perception biases growth potential (Subtle influence)
-    U += signal_val * (g_perception - 0.5) * 0.04; 
-    U = max(0.0, U); // HARD CLAMP to prevent extinction
+    // Growth derivative approximation G'(U)
+    // For G(U) = 2*exp(-0.5*((U-mu)/sigma)^2) - 1
+    // G'(U) = -2 * ((U-mu)/sigma^2) * exp(-0.5*((U-mu)/sigma)^2)
+    float optimalU = 0.15 + g_mu * 0.35; 
+    float tolerance = 0.03 + g_sigma * 0.12;
+    float diff = (U - optimalU);
+    float g_prime = -2.0 * (diff / max(tolerance * tolerance, 0.0001)) * exp(-0.5 * (diff * diff) / max(tolerance * tolerance, 0.0001));
     
     vec2 gradU = (totalWeight > 0.0) ? weightedGradient / totalWeight : vec2(0.0);
     
-    imageStore(img_potential, uv_i, vec4(U, gradU, 1.0));
+    // Store U in R, G' (growth force) in G, and keep original gradU in B,A or pack it
+    // Actually, let's just use R for U and GB for gradU. The flow shader will compute G'.
+    imageStore(img_potential, uv_i, vec4(U, gradU, g_prime));
 }

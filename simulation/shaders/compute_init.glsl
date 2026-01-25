@@ -83,5 +83,5 @@ void main() {
     );
     
     imageStore(img_state, uv_i, vec4(density, 0.0, 0.0, 0.0));
-    imageStore(img_genome, uv_i, packedGenome);
+    imageStore(img_genome, uv_i, (density > 0.01) ? packedGenome : vec4(0.0));
 }

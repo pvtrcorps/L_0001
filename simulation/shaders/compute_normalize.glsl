@@ -31,18 +31,16 @@ layout(set = 0, binding = 0, std430) buffer Params {
 
 layout(set = 0, binding = 1, r32ui) uniform uimage2D img_mass_accum;
 layout(set = 0, binding = 2) uniform sampler2D tex_potential;
-layout(set = 0, binding = 3) uniform sampler2D tex_new_genome;
 layout(set = 0, binding = 4, rgba32f) uniform image2D img_new_state;
 layout(set = 0, binding = 5, rgba32f) uniform image2D img_new_signal;
+layout(set = 0, binding = 6, r32ui) uniform uimage2D img_winner_tracker;
+layout(set = 0, binding = 7, rgba32f) uniform image2D img_new_genome;
+layout(set = 0, binding = 8) uniform sampler2D tex_old_genome;
 
 const float MASS_SCALE = 100000.0; 
 
-float growth(float U, float g_mu, float g_sigma) {
-    float optimalU = 0.15 + g_mu * 0.35; 
-    float tolerance = 0.03 + g_sigma * 0.12;
-    float d = (U - optimalU) / max(tolerance, 0.001);
-    return 2.0 * exp(-0.5 * d * d) - 1.0;
-}
+// 100% Flow Lenia: No additive growth.
+// Final mass is strictly determined by advection.
 
 vec2 unpack2(float packed) {
     uint bits = floatBitsToUint(packed);
@@ -65,46 +63,42 @@ void main() {
     vec2 velocity = prevData.gb; 
     float age = prevData.a;
     
-    // 3. Genome & Potential
     vec2 px = 1.0 / p.u_res;
     vec2 uv = (vec2(uv_i) + 0.5) * px;
     
-    vec4 genome = texture(tex_new_genome, uv);
-    vec2 mu_sigma = unpack2(genome.r);
-    float g_mu = mu_sigma.x;
-    float g_sigma = mu_sigma.y;
+    // 3. Genome Update (Winner-Takes-All)
+    uint packed = imageLoad(img_winner_tracker, uv_i).r;
+    imageStore(img_winner_tracker, uv_i, uvec4(0)); // Clear for next frame
     
-    vec2 affinity_lambda = unpack2(genome.b);
-    float g_lambda = affinity_lambda.y;
+    vec4 finalGenome = texture(tex_old_genome, uv); // Preserve by default if possible
+    if (packed != 0) {
+        uint winner_idx = packed & 0xFFFFFFu;
+        ivec2 res = ivec2(p.u_res);
+        ivec2 winner_coords = ivec2(winner_idx % res.x, winner_idx / res.x);
+        vec2 winner_uv = (vec2(winner_coords) + 0.5) / p.u_res;
+        finalGenome = texture(tex_old_genome, winner_uv);
+    } else if (mass < 0.001) {
+        finalGenome = vec4(0.0); // Only clear if no mass
+    }
     
-    vec2 secre_percep = unpack2(genome.a);
+    imageStore(img_new_genome, uv_i, finalGenome);
+    
+    vec2 secre_percep = unpack2(finalGenome.a);
     float g_secretion = secre_percep.x;
     
     float U = texture(tex_potential, uv).r;
     
-    // 4. Growth
-    float G = growth(U, g_mu, g_sigma);
-    float metabolism = 0.5 + g_lambda * 1.5; 
+    // 4. Finalization
+    float finalMass = mass;
     
-    float deltaMass = G * p.u_dt * metabolism;
+    // Cleanup Dust (Optional, but helps keep simulation clean)
+    if (finalMass < 0.001) finalMass = 0.0;
     
-    // --- METABOLIC TAX ---
-    // Emitting signals costs mass!
-    float metabolic_tax = g_secretion * 0.05 * p.u_dt; // [NEW]
-    deltaMass -= metabolic_tax;
-    
-    float finalMass = mass + deltaMass;
-    
-    // Cleanup Dust
-    if (finalMass < 0.01) finalMass = 0.0;
-    finalMass = clamp(finalMass, 0.0, 1.0);
-    
-    // 5. Secretion
-    // Only if cell is healthy
+    // 5. Secretion (Optional signaling component)
     if (finalMass > 0.05) {
         float currentSignal = imageLoad(img_new_signal, uv_i).r;
         float addedSignal = g_secretion * finalMass * p.u_dt * 0.5;
-        float nextSignal = clamp(currentSignal + addedSignal, 0.0, 2.0); // HARD CAP
+        float nextSignal = clamp(currentSignal + addedSignal, 0.0, 2.0);
         imageStore(img_new_signal, uv_i, vec4(nextSignal, 0.0, 0.0, 0.0));
     }
     

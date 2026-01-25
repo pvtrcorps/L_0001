@@ -22,7 +22,11 @@ layout(set = 0, binding = 0, std430) buffer Params {
     vec2 u_range_flow;
     vec2 u_range_affinity;
     vec2 u_range_lambda;
-    float _pad1, _pad2, _pad3;
+    float u_signal_diff;
+    float u_signal_decay;
+    vec2 u_range_secretion;
+    vec2 u_range_perception;
+    float _pad;
 } p;
 
 layout(set = 0, binding = 1, rgba32f) uniform image2D img_state;
@@ -32,27 +36,10 @@ float hash(vec2 pt) {
     return fract(sin(dot(pt, vec2(12.9898, 78.233))) * 43758.5453);
 }
 
-float rand_range(vec2 seed, float minVal, float maxVal) {
-    return minVal + hash(seed) * (maxVal - minVal);
-}
-
-// Generate a random genome based on seed
-vec4 generate_genome(vec2 seed) {
-    float mu = rand_range(seed + 0.1, p.u_range_mu.x, p.u_range_mu.y);
-    float sigma = rand_range(seed + 0.2, p.u_range_sigma.x, p.u_range_sigma.y);
-    float radius = rand_range(seed + 0.3, p.u_range_radius.x, p.u_range_radius.y);
-    float flow = rand_range(seed + 0.4, p.u_range_flow.x, p.u_range_flow.y);
-    float affinity = rand_range(seed + 0.5, p.u_range_affinity.x, p.u_range_affinity.y);
-    float lambda = rand_range(seed + 0.6, p.u_range_lambda.x, p.u_range_lambda.y);
-    
-    // Pack
-    uint p1 = uint(clamp(radius, 0.0, 1.0) * 65535.0) << 16 | uint(clamp(flow, 0.0, 1.0) * 65535.0);
-    uint p2 = uint(clamp(affinity, 0.0, 1.0) * 65535.0) << 16 | uint(clamp(lambda, 0.0, 1.0) * 65535.0);
-    
-    float packed1 = uintBitsToFloat(p1);
-    float packed2 = uintBitsToFloat(p2);
-    
-    return vec4(mu, sigma, packed1, packed2);
+float pack2(float a, float b) {
+    uint ia = uint(clamp(a, 0.0, 1.0) * 32767.0);
+    uint ib = uint(clamp(b, 0.0, 1.0) * 32767.0);
+    return uintBitsToFloat((ia << 15) | ib);
 }
 
 void main() {
@@ -61,28 +48,40 @@ void main() {
     
     vec2 uv = (vec2(uv_i) + 0.5) / p.u_res;
     
-    // Determine Quadrant
-    // Grid size from u_init_clusters (e.g., 2.0 -> 2x2 grid)
-    float grid_n = max(1.0, floor(p.u_init_clusters));
-    vec2 grid_pos = floor(uv * grid_n);
+    // 1. Density Initialization (Grid/Cluster)
+    float density = 0.0;
     
-    // Seed for this quadrant (Constant for the whole block)
-    vec2 quad_seed = grid_pos * 13.0 + p.u_seed;
+    float cell_x = floor(uv.x * p.u_init_clusters);
+    float cell_y = floor(uv.y * p.u_init_clusters);
+    float cell_hash = hash(vec2(cell_x, cell_y) + p.u_seed);
     
-    // Generate Genome for this Quadrant/Nation
-    vec4 genome = generate_genome(quad_seed);
-    
-    // Generate State (Mass) inside the quadrant
-    // Use salt density
-    float local_seed = hash(uv * 100.0 + p.u_seed);
-    float mass = 0.0;
-    
-    if (local_seed < p.u_init_density) {
-        // Random start mass
-        mass = 0.2 + hash(uv * 50.0) * 0.3;
+    if (cell_hash < p.u_init_density) {
+        vec2 cell_center = (vec2(cell_x, cell_y) + 0.5) / p.u_init_clusters;
+        float d = length(uv - cell_center) * p.u_init_clusters;
+        density = smoothstep(0.4, 0.2, d);
     }
     
-    // Store
-    imageStore(img_state, uv_i, vec4(mass, 0.0, 0.0, 0.0));
-    imageStore(img_genome, uv_i, genome);
+    // 2. Genome Generation (8 Genes)
+    // Species-specific base genome per cluster
+    vec2 species_seed = vec2(cell_x, cell_y) + p.u_seed;
+    
+    float g_mu = mix(p.u_range_mu.x, p.u_range_mu.y, hash(species_seed + 1.0));
+    float g_sigma = mix(p.u_range_sigma.x, p.u_range_sigma.y, hash(species_seed + 2.0));
+    float g_radius = mix(p.u_range_radius.x, p.u_range_radius.y, hash(species_seed + 3.0));
+    float g_flow = mix(p.u_range_flow.x, p.u_range_flow.y, hash(species_seed + 4.0));
+    float g_affinity = mix(p.u_range_affinity.x, p.u_range_affinity.y, hash(species_seed + 5.0));
+    float g_lambda = mix(p.u_range_lambda.x, p.u_range_lambda.y, hash(species_seed + 6.0));
+    float g_secretion = mix(p.u_range_secretion.x, p.u_range_secretion.y, hash(species_seed + 7.0));
+    float g_perception = mix(p.u_range_perception.x, p.u_range_perception.y, hash(species_seed + 8.0));
+    
+    // Pack 8 genes into RGBA32F
+    vec4 packedGenome = vec4(
+        pack2(g_mu, g_sigma),
+        pack2(g_radius, g_flow),
+        pack2(g_affinity, g_lambda),
+        pack2(g_secretion, g_perception)
+    );
+    
+    imageStore(img_state, uv_i, vec4(density, 0.0, 0.0, 0.0));
+    imageStore(img_genome, uv_i, packedGenome);
 }

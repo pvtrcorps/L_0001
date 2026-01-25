@@ -22,17 +22,22 @@ layout(set = 0, binding = 0, std430) buffer Params {
     vec2 u_range_flow;
     vec2 u_range_affinity;
     vec2 u_range_lambda;
-    float _pad1, _pad2, _pad3;
+    float u_signal_diff;
+    float u_signal_decay;
+    vec2 u_range_secretion;
+    vec2 u_range_perception;
+    float _pad;
 } p;
 
 layout(set = 0, binding = 1) uniform sampler2D tex_state;
 layout(set = 0, binding = 2) uniform sampler2D tex_genome;
-layout(set = 0, binding = 3, rgba32f) uniform image2D img_potential;
+layout(set = 0, binding = 3) uniform sampler2D tex_signal;
+layout(set = 0, binding = 4, rgba32f) uniform image2D img_potential;
 
 vec2 unpack2(float packed) {
     uint bits = floatBitsToUint(packed);
-    float a = float(bits >> 16) / 65535.0;
-    float b = float(bits & 0xFFFFu) / 65535.0;
+    float a = float((bits >> 15u) & 0x7FFFu) / 32767.0;
+    float b = float(bits & 0x7FFFu) / 32767.0;
     return vec2(a, b);
 }
 
@@ -42,46 +47,22 @@ float gaussian(float x, float mu, float sigma) {
 }
 
 // Species-Dependent Kernel
-// Uses genes to drastically change the ring structure
 float kernel(float r, float g_mu, float g_sigma, float g_radius, float g_affinity) {
-    
-    // Effective Radius: Genes vary size from 0.5x to 1.5x global R
     float R = p.u_R * (0.5 + g_radius); 
     float norm_r = r / R;
-    
     if (norm_r > 1.0) return 0.0;
     
-    // === MORPHOLOGY GENES ===
-    
-    // g_mu: Defines "Species Archetype" 
-    // Low mu = Compact/Circular (Ring 2 close to center)
-    // High mu = Spreading/Worm-like (Ring 2 far from center)
-    float r2_pos = 0.2 + g_mu * 0.45; // [0.2, 0.65]
-    
-    // g_affinity: "Social Factor" -> Controls Core (Ring 1)
-    // High affinity = Strong solid core (Solitons)
-    // Low affinity = Hollow core (Cells/Rings)
-    float w1 = g_affinity * 1.5; // [0.0, 1.5]
-    
-    // g_sigma: "Stability/Rigidity" -> Controls Outer Ring (Ring 3)
-    // Low sigma = High repression at distance (Stripes, rigid structures)
-    // High sigma = Low repression (Diffuse clouds, merging blobs)
-    float w3 = (1.0 - g_sigma) * 1.2; // [0.0, 1.2]
-    
-    // Ring 2 (Body) is always present as the main definer
+    float r2_pos = 0.2 + g_mu * 0.45;
+    float w1 = g_affinity * 1.5;
+    float w3 = (1.0 - g_sigma) * 1.2;
     float w2 = 1.0; 
-    
-    // Ring Widths
-    // Base width related to sigma (generalists have wider rings)
     float sig_base = 0.05 + g_sigma * 0.1;
     
-    // === RINGS ===
     float k1 = gaussian(norm_r, 0.1, 0.07) * w1;
     float k2 = gaussian(norm_r, r2_pos, sig_base) * w2;
     float k3 = gaussian(norm_r, 0.85, 0.09) * w3;
     
-    // Combine
-    return k1 + k2 + k3; // Simple additive synthesis allows for complex interference
+    return k1 + k2 + k3;
 }
 
 void main() {
@@ -90,15 +71,25 @@ void main() {
     
     vec2 uv = (vec2(uv_i) + 0.5) / p.u_res;
     
-    vec4 centerGenome = texture(tex_genome, uv);
-    float g_mu = centerGenome.r;
-    float g_sigma = centerGenome.g;
-    vec2 radius_flow = unpack2(centerGenome.b);
+    // Genome Unpacking (8 Genes)
+    vec4 g_tex = texture(tex_genome, uv);
+    vec2 mu_sigma = unpack2(g_tex.r);
+    float g_mu = mu_sigma.x;
+    float g_sigma = mu_sigma.y;
+    
+    vec2 radius_flow = unpack2(g_tex.g);
     float g_radius = radius_flow.x;
-    vec2 affinity_lambda = unpack2(centerGenome.a);
+    
+    vec2 affinity_lambda = unpack2(g_tex.b);
     float g_affinity = affinity_lambda.x;
     
-    float R_max = p.u_R * 1.6; // Safety margin
+    vec2 secre_percep = unpack2(g_tex.a);
+    float g_perception = secre_percep.y;
+    
+    // Read Signal
+    float signal_val = texture(tex_signal, uv).r;
+    
+    float R_max = p.u_R * 1.6;
     int maxR = int(R_max) + 1;
     
     float sum = 0.0;
@@ -127,6 +118,11 @@ void main() {
     }
     
     float U = (totalWeight > 0.0) ? sum / totalWeight : 0.0;
+    
+    // Signal perception biases growth potential (Subtle influence)
+    U += signal_val * (g_perception - 0.5) * 0.04; 
+    U = max(0.0, U); // HARD CLAMP to prevent extinction
+    
     vec2 gradU = (totalWeight > 0.0) ? weightedGradient / totalWeight : vec2(0.0);
     
     imageStore(img_potential, uv_i, vec4(U, gradU, 1.0));

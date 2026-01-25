@@ -27,6 +27,10 @@ var ui_schema = {
 		["identity_thr", "Identity Threshold", 0.0, 1.0, 0.01],
 		["colonize_thr", "Colonization Thr (Defense)", 0.0, 0.5, 0.01]
 	],
+	"Chemical Signal": [
+		["signal_diff", "Diffusion Rate", 0.0, 10.0, 0.1],
+		["signal_decay", "Decay Rate", 0.0, 1.0, 0.01]
+	],
 	"Evolution": [
 		["mutation_rate", "Mutation Rate", 0.0, 0.2, 0.005],
 		["base_decay", "Base Decay", 0.0, 0.1, 0.005]
@@ -38,12 +42,12 @@ var ui_schema = {
 		["g_sigma_max", "Sigma Max", 0.0, 1.0, 0.05],
 		["g_radius_min", "Radius Min", 0.0, 1.0, 0.05],
 		["g_radius_max", "Radius Max", 0.0, 1.0, 0.05],
-		["g_flow_min", "Flow Min (Mobility)", 0.0, 1.0, 0.05],
+		["g_flow_min", "Flow Min", 0.0, 1.0, 0.05],
 		["g_flow_max", "Flow Max", 0.0, 1.0, 0.05],
-		["g_affinity_min", "Affinity Min (Social)", 0.0, 1.0, 0.05],
-		["g_affinity_max", "Affinity Max", 0.0, 1.0, 0.05],
-		["g_lambda_min", "Lambda Min (Metabolism)", 0.0, 1.0, 0.05],
-		["g_lambda_max", "Lambda Max", 0.0, 1.0, 0.05]
+		["g_secretion_min", "Secretion Min", 0.0, 1.0, 0.05],
+		["g_secretion_max", "Secretion Max", 0.0, 1.0, 0.05],
+		["g_perception_min", "Sensus Min", 0.0, 1.0, 0.05],
+		["g_perception_max", "Sensus Max", 0.0, 1.0, 0.05]
 	]
 }
 
@@ -56,7 +60,6 @@ func _ready():
 	sim.reset_simulation()
 	sim.reset_simulation()
 	sim.stats_updated.connect(_on_stats_updated)
-	sim.species_list_updated.connect(_on_species_list_updated)
 	sim.species_hovered.connect(_on_species_hovered)
 
 func _build_ui():
@@ -190,17 +193,6 @@ func _build_ui():
 	
 	histogram_display = GeneHistogram.new()
 	ui_container.add_child(histogram_display)
-	
-	# Species List
-	ui_container.add_child(HSeparator.new())
-	var sp_header = Label.new()
-	sp_header.text = "DETECTED SPECIES"
-	sp_header.add_theme_color_override("font_color", Color(1.0, 0.8, 0.2))
-	sp_header.add_theme_font_size_override("font_size", 14)
-	ui_container.add_child(sp_header)
-	
-	species_container = VBoxContainer.new()
-	ui_container.add_child(species_container)
 
 func _on_stats_updated(total_mass, population, histograms):
 	# Update Labels
@@ -219,37 +211,7 @@ func _on_stats_updated(total_mass, population, histograms):
 	if histogram_display:
 		histogram_display.update_histograms(histograms)
 
-func _on_species_list_updated(list):
-	# Clear old list
-	for c in species_container.get_children():
-		c.queue_free()
-	
-	# Populate new
-	if list.is_empty():
-		var lbl = Label.new()
-		lbl.text = "(Scanning...)"
-		lbl.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
-		lbl.add_theme_font_size_override("font_size", 10)
-		species_container.add_child(lbl)
-		return
-		
-	for s in list:
-		var row = HBoxContainer.new()
-		
-		# Color Box
-		var color_rect = ColorRect.new()
-		color_rect.custom_minimum_size = Vector2(16, 16)
-		color_rect.color = s.color
-		row.add_child(color_rect)
-		
-		# Label
-		var lbl = Label.new()
-		# Format: #ID Name Pop: 1200 [Mu:0.5 Sig:0.2]
-		lbl.text = "#%d %s Pop:%d [μ:%.2f σ:%.2f]" % [s.id, s.name, s.area, s.genes["mu"], s.genes["sigma"]]
-		lbl.add_theme_font_size_override("font_size", 10)
-		row.add_child(lbl)
-		
-		species_container.add_child(row)
+
 		
 func _on_species_hovered(info):
 	if tooltip_panel:
@@ -257,19 +219,17 @@ func _on_species_hovered(info):
 			tooltip_panel.visible = false
 		else:
 			tooltip_panel.visible = true
-			var txt = "[b]Species #%s[/b]: %s\n" % [str(info.get("id", "?")), info.get("name", "Unknown")]
+			var txt = "Species #%s: %s\n" % [str(info.get("id", "?")), info.get("name", "Unknown")]
 			txt += "Mass: %d\n" % int(info.get("mass", 0) * 1000)
 			txt += "Archetype: %.2f\n" % info.get("mu", 0.0)
 			txt += "Stability: %.2f\n" % info.get("sigma", 0.0)
 			txt += "Cohesion: %.2f\n" % info.get("affinity", 0.0)
 			txt += "Mobility: %.2f\n" % info.get("flow", 0.0)
-			txt += "Growth: %.2f" % info.get("lambda", 0.0)
+			txt += "Secretion: %.2f\n" % info.get("secretion", 0.0)
+			txt += "Sensus: %.2f" % info.get("perception", 0.0)
 			
 			if tooltip_label:
 				tooltip_label.text = txt
-				# Enable Rich Text? Label supports basic text. Use bbcode enabled if RichTextLabel.
-				# Just plain text for Label. Remove [b].
-				tooltip_label.text = txt.replace("[b]", "").replace("[/b]", "")
 
 	# Move tooltip to mouse
 	if tooltip_panel.visible:

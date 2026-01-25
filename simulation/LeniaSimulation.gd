@@ -11,7 +11,7 @@ var tracker = SpeciesTracker.new()
 var params = {
 	"res_x": 1024.0, 
 	"res_y": 1024.0,
-	"dt": 0.25,
+	"dt": 0.1,
 	"seed": 0.0,
 	# Kernel shape (global - creates pattern types)
 	"R": 12.0,           # Kernel radius in pixels
@@ -29,13 +29,19 @@ var params = {
 	"identity_thr": 0.2,   # Difference to be considered enemy
 	"colonize_thr": 0.15,  # Mass needed to resist invasion
 	
+	# Signal Layer
+	"signal_diff": 2.0,    # Diffusion Rate
+	"signal_decay": 0.1,   # Decay Rate
+	
 	# Gene Ranges (Min, Max) [0.0, 1.0]
 	"g_mu_min": 0.0, "g_mu_max": 1.0,
 	"g_sigma_min": 0.0, "g_sigma_max": 1.0, 
 	"g_radius_min": 0.0, "g_radius_max": 1.0,
 	"g_flow_min": 0.0, "g_flow_max": 1.0,
 	"g_affinity_min": 0.0, "g_affinity_max": 1.0,
-	"g_lambda_min": 0.0, "g_lambda_max": 1.0
+	"g_lambda_min": 0.0, "g_lambda_max": 1.0,
+	"g_secretion_min": 0.0, "g_secretion_max": 1.0,
+	"g_perception_min": 0.0, "g_perception_max": 1.0
 }
 
 # === RENDERING DEVICE RESOURCES ===
@@ -44,6 +50,7 @@ var shader_init: RID
 var shader_conv: RID
 var shader_flow: RID
 var shader_stats: RID
+var shader_signal: RID # [NEW]
 var pipeline_init: RID
 var pipeline_conv: RID
 var pipeline_flow: RID
@@ -51,26 +58,31 @@ var pipeline_stats: RID
 var pipeline_analysis: RID
 var pipeline_flow_conservative: RID
 var pipeline_normalize: RID
+var pipeline_signal: RID # [NEW]
 var shader_analysis: RID
 var shader_flow_conservative: RID
 var shader_normalize: RID
 
-# Textures: State (mass, vel, age) and Genome (6 genes)
+# Textures: State (mass, vel, age) and Genome (8 genes packed)
 var tex_state_a: RID
 var tex_state_b: RID
 var tex_genome_a: RID
 var tex_genome_b: RID
 var tex_potential: RID
 var tex_mass_accum: RID
+var tex_signal_a: RID # [NEW]
+var tex_signal_b: RID # [NEW]
 
 # Bridges for display
 var texture_rd_state: Texture2DRD
 var texture_rd_genome: Texture2DRD
+var texture_rd_signal: Texture2DRD # [NEW]
 
 var ubo: RID
 var stats_buffer: RID
 var analysis_buffer: RID
-var sampler: RID
+var sampler_linear: RID
+var sampler_nearest: RID
 var ping_pong := false
 var initialized := false
 var paused := false # Pause state
@@ -79,6 +91,7 @@ var paused := false # Pause state
 var set_cache = {}
 
 var stats_frame_count := 0
+var analysis_frame_count := 0
 var last_analysis_bytes: PackedByteArray
 var last_species_list = []
 
@@ -86,6 +99,7 @@ var last_species_list = []
 var camera_pos := Vector2(0.0, 0.0)
 var camera_zoom := 1.0
 var is_dragging := false
+var is_inspecting := false # New: Track right-click state
 var last_mouse_pos := Vector2()
 
 @export var display_material: ShaderMaterial
@@ -105,7 +119,7 @@ func _ready():
 	# Run Init once
 	_dispatch_init()
 	initialized = true
-	print("Parametric Lenia initialized: ", int(params["res_x"]), "x", int(params["res_y"]))
+	print("Parametric Lenia with Signaling initialized.")
 
 func _process(_delta):
 	if not initialized: return
@@ -113,37 +127,34 @@ func _process(_delta):
 	# Update random seed
 	params["seed"] = randf() * 1000.0
 	
+	# 1. Update UBO
 	if not paused:
-		# Update UBO
 		_update_ubo()
-		
-		# Dispatch Simulation Step
 		_dispatch_step()
 	
-	# Statistics Readback (every 10 frames)
+	# 2. Performance Counters & Throttled Readbacks
 	stats_frame_count += 1
 	if stats_frame_count >= 10:
 		stats_frame_count = 0
+		# Run Stats Pass ONLY when needed
+		_dispatch_stats()
 		var bytes = rd.buffer_get_data(stats_buffer)
-		# Parse: total_mass (uint), population (uint), histograms (60 uints)
-		# 62 uints * 4 = 248 bytes
-		if bytes.size() >= 248:
-			var data = bytes.to_int32_array() # Note: Godot uses signed int array for convenience
-			# Interpret as unsigned where needed
-			var total_mass = float(data[0]) / 1000.0 # Unscale
+		if bytes.size() >= 328:
+			var data = bytes.to_int32_array()
+			var total_mass = float(data[0]) / 1000.0
 			var population = data[1]
 			var histograms = []
-			# Copy histograms (indices 2 to 61)
-			for i in range(2, 62):
-				histograms.append(data[i])
+			for i in range(2, 82): histograms.append(data[i])
 			emit_signal("stats_updated", total_mass, population, histograms)
 	
-	# Species Analysis (every 30 frames ~ 0.5s)
-	if stats_frame_count % 30 == 0:
+	analysis_frame_count += 1
+	if analysis_frame_count >= 30:
+		analysis_frame_count = 0
+		# Run Analysis Pass ONLY when needed
+		_dispatch_analysis()
 		var bytes = rd.buffer_get_data(analysis_buffer)
-		if bytes.size() >= 131072:
+		if bytes.size() >= 163840:
 			last_analysis_bytes = bytes
-			# Run heavy task in a thread? For now main thread is fine for 64x64 grid
 			var species_list = tracker.find_species(bytes)
 			last_species_list = species_list
 			emit_signal("species_list_updated", species_list)
@@ -152,6 +163,7 @@ func _process(_delta):
 	if display_material:
 		var current_state = tex_state_b if ping_pong else tex_state_a
 		var current_genome = tex_genome_b if ping_pong else tex_genome_a
+		var current_signal = tex_signal_b if ping_pong else tex_signal_a
 		
 		if texture_rd_state.texture_rd_rid != current_state:
 			texture_rd_state.texture_rd_rid = current_state
@@ -159,25 +171,28 @@ func _process(_delta):
 		if texture_rd_genome.texture_rd_rid != current_genome:
 			texture_rd_genome.texture_rd_rid = current_genome
 			
+		if texture_rd_signal.texture_rd_rid != current_signal:
+			texture_rd_signal.texture_rd_rid = current_signal
+			
 		display_material.set_shader_parameter("camera_pos", camera_pos)
 		display_material.set_shader_parameter("camera_zoom", camera_zoom)
 
 func _update_ubo():
-	# UBO layout: 28 floats
+	# UBO layout: 32 floats (128 bytes)
 	var buffer = PackedFloat32Array([
 		params["res_x"], params["res_y"],      # vec2 u_res
 		params["dt"], params["seed"],          # float u_dt, u_seed
 		# Kernel parameters
 		params["R"],                           # float u_R
-		params["repulsion"], params["damage"], params["identity_thr"], # Replaces unused w1,w2,w3
+		params["repulsion"], params["damage"], params["identity_thr"],
 		# Evolution
 		params["mutation_rate"],               # float u_mutation_rate
 		params["base_decay"],                  # float u_base_decay
 		# Initialization  
 		params["init_clusters"],               # float u_init_clusters
 		params["init_density"],                # float u_init_density
-		params["colonize_thr"],                # _pad0 usage: Colonization Threshold
-		0.0,                                   # Padding for std430 vec2 alignment (Offset 52->56)
+		params["colonize_thr"],                # Threshold for colony resistance
+		0.0,                                   # Padding
 		# Gene Ranges (12 floats)
 		params["g_mu_min"], params["g_mu_max"],
 		params["g_sigma_min"], params["g_sigma_max"],
@@ -185,7 +200,11 @@ func _update_ubo():
 		params["g_flow_min"], params["g_flow_max"],
 		params["g_affinity_min"], params["g_affinity_max"],
 		params["g_lambda_min"], params["g_lambda_max"],
-		0.0, 0.0, 0.0, 0.0, 0.0, 0.0           # padding to 32 scans
+		# Signal Params & More Ranges (4 floats)
+		params["signal_diff"], params["signal_decay"],
+		params["g_secretion_min"], params["g_secretion_max"],
+		params["g_perception_min"], params["g_perception_max"],
+		0.0, 0.0                               # Padding to 32 floats
 	])
 	var bytes = buffer.to_byte_array()
 	rd.buffer_update(ubo, 0, bytes.size(), bytes)
@@ -196,26 +215,45 @@ func _dispatch_step():
 	var src_genome = tex_genome_b if ping_pong else tex_genome_a
 	var dst_genome = tex_genome_a if ping_pong else tex_genome_b
 	
+	var src_signal = tex_signal_b if ping_pong else tex_signal_a
+	var dst_signal = tex_signal_a if ping_pong else tex_signal_b
+	
 	var wg_x = int(ceil(params["res_x"] / 8.0))
 	var wg_y = int(ceil(params["res_y"] / 8.0))
 	
-	# 1. Convolution Pass: Calculate potential from state using genome
-	var set_conv = _create_set_conv(src_state, src_genome, tex_potential)
+	# 1. Signal Evolution Pass
+	var key_signal = "sig_" + str(ping_pong)
+	var set_signal = set_cache.get(key_signal)
+	if not set_signal or not set_signal.is_valid():
+		set_signal = _create_set_signal(src_signal, dst_signal)
+		set_cache[key_signal] = set_signal
+		
+	var compute_list_signal = rd.compute_list_begin()
+	rd.compute_list_bind_compute_pipeline(compute_list_signal, pipeline_signal)
+	rd.compute_list_bind_uniform_set(compute_list_signal, set_signal, 0)
+	rd.compute_list_dispatch(compute_list_signal, wg_x, wg_y, 1)
+	rd.compute_list_end()
+	
+	rd.barrier(RenderingDevice.BARRIER_MASK_COMPUTE)
+	
+	# 2. Convolution Pass
+	var key_conv = "conv_" + str(ping_pong)
+	var set_conv = set_cache.get(key_conv)
+	if not set_conv or not set_conv.is_valid():
+		set_conv = _create_set_conv(src_state, src_genome, dst_signal, tex_potential)
+		set_cache[key_conv] = set_conv
+		
 	var compute_list = rd.compute_list_begin()
 	rd.compute_list_bind_compute_pipeline(compute_list, pipeline_conv)
 	rd.compute_list_bind_uniform_set(compute_list, set_conv, 0)
 	rd.compute_list_dispatch(compute_list, wg_x, wg_y, 1)
 	rd.compute_list_end()
 	
-	rd.compute_list_end()
-	
-	# 2. Flow Pass (Conservative: Atomic Push)
+	# 3. Flow Pass
 	var cache_key_flow = "flow_" + str(ping_pong)
-	var set_flow_con: RID
-	if set_cache.has(cache_key_flow) and set_cache[cache_key_flow].is_valid():
-		set_flow_con = set_cache[cache_key_flow]
-	else:
-		set_flow_con = _create_set_flow_conservative(src_state, src_genome, tex_potential, dst_state, dst_genome)
+	var set_flow_con = set_cache.get(cache_key_flow)
+	if not set_flow_con or not set_flow_con.is_valid():
+		set_flow_con = _create_set_flow_conservative(src_state, src_genome, dst_signal, tex_potential, dst_state, dst_genome)
 		set_cache[cache_key_flow] = set_flow_con
 	
 	var compute_list_flow = rd.compute_list_begin()
@@ -224,17 +262,14 @@ func _dispatch_step():
 	rd.compute_list_dispatch(compute_list_flow, wg_x, wg_y, 1)
 	rd.compute_list_end()
 	
-	# Memory Barrier
 	rd.barrier(RenderingDevice.BARRIER_MASK_COMPUTE)
 	
-	# 3. Normalize Pass (Atomic -> Float + Growth)
-	var cache_key_norm = "norm_" + str(ping_pong)
-	var set_norm: RID
-	if set_cache.has(cache_key_norm) and set_cache[cache_key_norm].is_valid():
-		set_norm = set_cache[cache_key_norm]
-	else:
-		set_norm = _create_set_normalize(tex_potential, dst_genome, dst_state)
-		set_cache[cache_key_norm] = set_norm
+	# 4. Normalize Pass
+	var key_norm = "norm_" + str(ping_pong)
+	var set_norm = set_cache.get(key_norm)
+	if not set_norm or not set_norm.is_valid():
+		set_norm = _create_set_normalize(tex_potential, dst_genome, dst_state, dst_signal)
+		set_cache[key_norm] = set_norm
 	
 	var compute_list_norm = rd.compute_list_begin()
 	rd.compute_list_bind_compute_pipeline(compute_list_norm, pipeline_normalize)
@@ -242,34 +277,46 @@ func _dispatch_step():
 	rd.compute_list_dispatch(compute_list_norm, wg_x, wg_y, 1)
 	rd.compute_list_end()
 	
-	# === STATS DISPATCH ===
-	# Clear stats buffer first (using new byte array of zeros)
-	var clear_bytes = PackedByteArray()
-	clear_bytes.resize(248) # Zeros
-	rd.buffer_update(stats_buffer, 0, 248, clear_bytes)
+	ping_pong = !ping_pong
+
+func _dispatch_stats():
+	var dst_state = tex_state_b if ping_pong else tex_state_a
+	var dst_genome = tex_genome_b if ping_pong else tex_genome_a
+	var wg_x = int(ceil(params["res_x"] / 8.0))
+	var wg_y = int(ceil(params["res_y"] / 8.0))
 	
-	# We want stats of the NEW state (dst_state)
-	var set_stats = _create_set_stats(dst_state, dst_genome)
+	var key_stats = "stats_" + str(ping_pong)
+	var set_stats = set_cache.get(key_stats)
+	if not set_stats or not set_stats.is_valid():
+		set_stats = _create_set_stats(dst_state, dst_genome)
+		set_cache[key_stats] = set_stats
+		
+	# Clear stats buffer (82 uints = 328 bytes)
+	var clear_bytes = PackedByteArray()
+	clear_bytes.resize(328)
+	rd.buffer_update(stats_buffer, 0, 328, clear_bytes)
 	
 	var compute_list_stats = rd.compute_list_begin()
 	rd.compute_list_bind_compute_pipeline(compute_list_stats, pipeline_stats)
 	rd.compute_list_bind_uniform_set(compute_list_stats, set_stats, 0)
 	rd.compute_list_dispatch(compute_list_stats, wg_x, wg_y, 1)
 	rd.compute_list_end()
+
+func _dispatch_analysis():
+	var dst_state = tex_state_b if ping_pong else tex_state_a
+	var dst_genome = tex_genome_b if ping_pong else tex_genome_a
 	
-	# === ANALYSIS DISPATCH ===
-	# 64x64 threads = 1 global group if local_size=8x8 and we dispatch 8x8 groups.
-	# Shader uses grid index. Total threads needed: 64x64.
-	# Local size 8x8. Groups needed: 64/8 = 8.
-	var set_analysis = _create_set_analysis(dst_state, dst_genome)
+	var key_analysis = "analysis_" + str(ping_pong)
+	var set_analysis = set_cache.get(key_analysis)
+	if not set_analysis or not set_analysis.is_valid():
+		set_analysis = _create_set_analysis(dst_state, dst_genome)
+		set_cache[key_analysis] = set_analysis
 	
 	var compute_list_analysis = rd.compute_list_begin()
 	rd.compute_list_bind_compute_pipeline(compute_list_analysis, pipeline_analysis)
 	rd.compute_list_bind_uniform_set(compute_list_analysis, set_analysis, 0)
-	rd.compute_list_dispatch(compute_list_analysis, 8, 8, 1) # 8*8 * 8*8 = 64*64 threads
+	rd.compute_list_dispatch(compute_list_analysis, 8, 8, 1) 
 	rd.compute_list_end()
-	
-	ping_pong = !ping_pong
 
 func _dispatch_init():
 	var set_init = _create_set_init(tex_state_a, tex_genome_a)
@@ -282,36 +329,46 @@ func _dispatch_init():
 	rd.compute_list_dispatch(compute_list, wg_x, wg_y, 1)
 	rd.compute_list_end()
 	
-	# Also clear buffer B
+	# Also clear buffers
 	rd.texture_clear(tex_state_b, Color(0,0,0,0), 0, 1, 0, 1)
 	rd.texture_clear(tex_genome_b, Color(0,0,0,0), 0, 1, 0, 1)
+	rd.texture_clear(tex_signal_a, Color(0,0,0,0), 0, 1, 0, 1)
+	rd.texture_clear(tex_signal_b, Color(0,0,0,0), 0, 1, 0, 1)
 	
+	rd.barrier(RenderingDevice.BARRIER_MASK_COMPUTE)
 	ping_pong = false
 
 func _create_uniforms():
-	# UBO: 32 floats = 128 bytes (aligned to 16 bytes)
+	# UBO: 34 floats = 136 bytes (aligned to 8 bytes for vec2s)
 	var buffer = PackedFloat32Array()
-	buffer.resize(32)
+	buffer.resize(34)
 	var bytes = buffer.to_byte_array()
 	ubo = rd.storage_buffer_create(bytes.size(), bytes)
 	
-	# Stats Buffer: 62 uints = 248 bytes
+	# Stats Buffer: 82 uints = 328 bytes
 	var stats_bytes = PackedByteArray()
-	stats_bytes.resize(248)
-	stats_buffer = rd.storage_buffer_create(248, stats_bytes)
+	stats_bytes.resize(328)
+	stats_buffer = rd.storage_buffer_create(328, stats_bytes)
 	
-	# Analysis Buffer: 4096 cells * 32 bytes = 131072 bytes
+	# Analysis Buffer: 4096 cells * 10 floats (40 bytes) = 163840 bytes
 	var analysis_bytes = PackedByteArray()
-	analysis_bytes.resize(131072)
-	analysis_buffer = rd.storage_buffer_create(131072, analysis_bytes)
+	analysis_bytes.resize(163840)
+	analysis_buffer = rd.storage_buffer_create(163840, analysis_bytes)
 
 func _create_sampler():
-	var sampler_state = RDSamplerState.new()
-	sampler_state.repeat_u = RenderingDevice.SAMPLER_REPEAT_MODE_REPEAT
-	sampler_state.repeat_v = RenderingDevice.SAMPLER_REPEAT_MODE_REPEAT
-	sampler_state.min_filter = RenderingDevice.SAMPLER_FILTER_LINEAR
-	sampler_state.mag_filter = RenderingDevice.SAMPLER_FILTER_LINEAR
-	sampler = rd.sampler_create(sampler_state)
+	var sampler_state_linear = RDSamplerState.new()
+	sampler_state_linear.repeat_u = RenderingDevice.SAMPLER_REPEAT_MODE_REPEAT
+	sampler_state_linear.repeat_v = RenderingDevice.SAMPLER_REPEAT_MODE_REPEAT
+	sampler_state_linear.min_filter = RenderingDevice.SAMPLER_FILTER_LINEAR
+	sampler_state_linear.mag_filter = RenderingDevice.SAMPLER_FILTER_LINEAR
+	sampler_linear = rd.sampler_create(sampler_state_linear)
+	
+	var sampler_state_nearest = RDSamplerState.new()
+	sampler_state_nearest.repeat_u = RenderingDevice.SAMPLER_REPEAT_MODE_REPEAT
+	sampler_state_nearest.repeat_v = RenderingDevice.SAMPLER_REPEAT_MODE_REPEAT
+	sampler_state_nearest.min_filter = RenderingDevice.SAMPLER_FILTER_NEAREST
+	sampler_state_nearest.mag_filter = RenderingDevice.SAMPLER_FILTER_NEAREST
+	sampler_nearest = rd.sampler_create(sampler_state_nearest)
 
 func _create_textures():
 	var fmt = RDTextureFormat.new()
@@ -332,6 +389,21 @@ func _create_textures():
 	tex_genome_b = rd.texture_create(fmt, RDTextureView.new())
 	tex_potential = rd.texture_create(fmt, RDTextureView.new())
 	
+	# Signal Textures (RGBA32F for compatibility)
+	var fmt_sig = RDTextureFormat.new()
+	fmt_sig.width = int(params["res_x"])
+	fmt_sig.height = int(params["res_y"])
+	fmt_sig.format = RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT
+	fmt_sig.usage_bits = (
+		RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT | 
+		RenderingDevice.TEXTURE_USAGE_STORAGE_BIT | 
+		RenderingDevice.TEXTURE_USAGE_CAN_UPDATE_BIT | 
+		RenderingDevice.TEXTURE_USAGE_CAN_COPY_FROM_BIT |
+		RenderingDevice.TEXTURE_USAGE_CAN_COPY_TO_BIT
+	)
+	tex_signal_a = rd.texture_create(fmt_sig, RDTextureView.new())
+	tex_signal_b = rd.texture_create(fmt_sig, RDTextureView.new())
+	
 	# Atomic Mass Accumulation (R32_UINT)
 	var fmt_atomic = RDTextureFormat.new()
 	fmt_atomic.width = int(params["res_x"])
@@ -340,65 +412,83 @@ func _create_textures():
 	fmt_atomic.usage_bits = (
 		RenderingDevice.TEXTURE_USAGE_STORAGE_BIT | 
 		RenderingDevice.TEXTURE_USAGE_CAN_UPDATE_BIT | 
-		RenderingDevice.TEXTURE_USAGE_CAN_COPY_FROM_BIT
+		RenderingDevice.TEXTURE_USAGE_CAN_COPY_FROM_BIT |
+		RenderingDevice.TEXTURE_USAGE_CAN_COPY_TO_BIT
 	)
 	tex_mass_accum = rd.texture_create(fmt_atomic, RDTextureView.new())
 	
 	# Create Texture2DRD bridges for display
 	texture_rd_state = Texture2DRD.new()
 	texture_rd_genome = Texture2DRD.new()
+	texture_rd_signal = Texture2DRD.new()
 	texture_rd_state.texture_rd_rid = tex_state_a
 	texture_rd_genome.texture_rd_rid = tex_genome_a
+	texture_rd_signal.texture_rd_rid = tex_signal_a
 	
 	if display_material:
 		display_material.set_shader_parameter("tex_state", texture_rd_state)
 		display_material.set_shader_parameter("tex_genome", texture_rd_genome)
+		display_material.set_shader_parameter("tex_signal", texture_rd_signal)
 
 func _compile_shaders():
-	shader_init = _load_shader("res://simulation/shaders/compute_init.glsl")
-	pipeline_init = rd.compute_pipeline_create(shader_init)
+	var paths = {
+		"init": "res://simulation/shaders/compute_init.glsl",
+		"conv": "res://simulation/shaders/compute_convolution.glsl",
+		"stats": "res://simulation/shaders/compute_stats.glsl",
+		"analysis": "res://simulation/shaders/compute_analysis.glsl",
+		"flow_con": "res://simulation/shaders/compute_flow_conservative.glsl",
+		"norm": "res://simulation/shaders/compute_normalize.glsl",
+		"signal": "res://simulation/shaders/compute_signal.glsl"
+	}
 	
-	shader_conv = _load_shader("res://simulation/shaders/compute_convolution.glsl")
-	pipeline_conv = rd.compute_pipeline_create(shader_conv)
+	shader_init = _load_shader(paths["init"])
+	shader_conv = _load_shader(paths["conv"])
+	shader_stats = _load_shader(paths["stats"])
+	shader_analysis = _load_shader(paths["analysis"])
+	shader_flow_conservative = _load_shader(paths["flow_con"])
+	shader_normalize = _load_shader(paths["norm"])
+	shader_signal = _load_shader(paths["signal"])
 	
-	shader_flow = _load_shader("res://simulation/shaders/compute_flow.glsl")
-	pipeline_flow = rd.compute_pipeline_create(shader_flow)
-
-	shader_stats = _load_shader("res://simulation/shaders/compute_stats.glsl")
-	pipeline_stats = rd.compute_pipeline_create(shader_stats)
-
-	shader_analysis = _load_shader("res://simulation/shaders/compute_analysis.glsl")
-	pipeline_analysis = rd.compute_pipeline_create(shader_analysis)
+	# Validate Shaders before creating pipelines
+	if not shader_init.is_valid(): push_error("Shader Init invalid")
+	else: pipeline_init = rd.compute_pipeline_create(shader_init)
 	
-	shader_flow_conservative = _load_shader("res://simulation/shaders/compute_flow_conservative.glsl")
-	pipeline_flow_conservative = rd.compute_pipeline_create(shader_flow_conservative)
+	if not shader_conv.is_valid(): push_error("Shader Conv invalid")
+	else: pipeline_conv = rd.compute_pipeline_create(shader_conv)
 	
-	shader_normalize = _load_shader("res://simulation/shaders/compute_normalize.glsl")
-	pipeline_normalize = rd.compute_pipeline_create(shader_normalize)
+	if not shader_stats.is_valid(): push_error("Shader Stats invalid")
+	else: pipeline_stats = rd.compute_pipeline_create(shader_stats)
+	
+	if not shader_analysis.is_valid(): push_error("Shader Analysis invalid")
+	else: pipeline_analysis = rd.compute_pipeline_create(shader_analysis)
+	
+	if not shader_flow_conservative.is_valid(): push_error("Shader FlowCon invalid")
+	else: pipeline_flow_conservative = rd.compute_pipeline_create(shader_flow_conservative)
+	
+	if not shader_normalize.is_valid(): push_error("Shader Norm invalid")
+	else: pipeline_normalize = rd.compute_pipeline_create(shader_normalize)
+	
+	if not shader_signal.is_valid(): push_error("Shader Signal invalid")
+	else: pipeline_signal = rd.compute_pipeline_create(shader_signal)
 
 func _load_shader(path: String) -> RID:
-	# Try loading as a Resource first (Best practice in Godot 4)
-	if FileAccess.file_exists(path + ".import"):
-		var shader_res = load(path)
-		if shader_res and shader_res is RDShaderFile:
-			var spirv = shader_res.get_spirv()
-			return rd.shader_create_from_spirv(spirv)
-	
-	# Fallback: Manual compilation
-	var file = FileAccess.open(path, FileAccess.READ)
-	var code = file.get_as_text()
-	
-	# Strip #[compute] directive if present
-	if code.begins_with("#[compute]"):
-		code = code.replace("#[compute]", "")
+	# Prioritize Direct Source Loading to avoid .import lag
+	if FileAccess.file_exists(path):
+		var file = FileAccess.open(path, FileAccess.READ)
+		var code = file.get_as_text()
 		
-	var src = RDShaderSource.new()
-	src.source_compute = code
-	var spirv = rd.shader_compile_spirv_from_source(src)
-	if spirv.compile_error_compute != "":
-		push_error("Shader Compile Error: " + path + "\n" + spirv.compile_error_compute)
-		return RID()
-	return rd.shader_create_from_spirv(spirv)
+		# Strip #[compute] directive
+		if code.begins_with("#[compute]"):
+			code = code.replace("#[compute]", "")
+			
+		var src = RDShaderSource.new()
+		src.source_compute = code
+		var spirv = rd.shader_compile_spirv_from_source(src)
+		if spirv.compile_error_compute != "":
+			push_error("Shader Compile Error: " + path + "\n" + spirv.compile_error_compute)
+			return RID()
+		return rd.shader_create_from_spirv(spirv)
+	return RID()
 
 # === UNIFORM SET CREATION HELPERS ===
 
@@ -420,7 +510,26 @@ func _create_set_init(dst_state: RID, dst_genome: RID) -> RID:
 	
 	return rd.uniform_set_create([u_ubo, u_state, u_genome], shader_init, 0)
 
-func _create_set_conv(src_state: RID, src_genome: RID, dst_potential: RID) -> RID:
+func _create_set_signal(src_sig: RID, dst_sig: RID) -> RID:
+	var u_ubo = RDUniform.new()
+	u_ubo.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+	u_ubo.binding = 0
+	u_ubo.add_id(ubo)
+	
+	var u_src = RDUniform.new()
+	u_src.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	u_src.binding = 1
+	u_src.add_id(sampler_linear)
+	u_src.add_id(src_sig)
+	
+	var u_dst = RDUniform.new()
+	u_dst.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	u_dst.binding = 2
+	u_dst.add_id(dst_sig)
+	
+	return rd.uniform_set_create([u_ubo, u_src, u_dst], shader_signal, 0)
+
+func _create_set_conv(src_state: RID, src_genome: RID, src_sig: RID, dst_potential: RID) -> RID:
 	var u_ubo = RDUniform.new()
 	u_ubo.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
 	u_ubo.binding = 0
@@ -429,21 +538,27 @@ func _create_set_conv(src_state: RID, src_genome: RID, dst_potential: RID) -> RI
 	var u_state = RDUniform.new()
 	u_state.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 	u_state.binding = 1
-	u_state.add_id(sampler)
+	u_state.add_id(sampler_linear)
 	u_state.add_id(src_state)
 	
 	var u_genome = RDUniform.new()
 	u_genome.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 	u_genome.binding = 2
-	u_genome.add_id(sampler)
+	u_genome.add_id(sampler_nearest)
 	u_genome.add_id(src_genome)
+	
+	var u_sig = RDUniform.new()
+	u_sig.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	u_sig.binding = 3
+	u_sig.add_id(sampler_linear)
+	u_sig.add_id(src_sig)
 	
 	var u_potential = RDUniform.new()
 	u_potential.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
-	u_potential.binding = 3
+	u_potential.binding = 4
 	u_potential.add_id(dst_potential)
 	
-	return rd.uniform_set_create([u_ubo, u_state, u_genome, u_potential], shader_conv, 0)
+	return rd.uniform_set_create([u_ubo, u_state, u_genome, u_sig, u_potential], shader_conv, 0)
 
 func _create_set_flow(src_state: RID, src_genome: RID, src_potential: RID, 
 					  dst_state: RID, dst_genome: RID) -> RID:
@@ -455,19 +570,19 @@ func _create_set_flow(src_state: RID, src_genome: RID, src_potential: RID,
 	var u_src_state = RDUniform.new()
 	u_src_state.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 	u_src_state.binding = 1
-	u_src_state.add_id(sampler)
+	u_src_state.add_id(sampler_linear)
 	u_src_state.add_id(src_state)
 	
 	var u_src_genome = RDUniform.new()
 	u_src_genome.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 	u_src_genome.binding = 2
-	u_src_genome.add_id(sampler)
+	u_src_genome.add_id(sampler_nearest)
 	u_src_genome.add_id(src_genome)
 	
 	var u_src_potential = RDUniform.new()
 	u_src_potential.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 	u_src_potential.binding = 3
-	u_src_potential.add_id(sampler)
+	u_src_potential.add_id(sampler_linear)
 	u_src_potential.add_id(src_potential)
 	
 	var u_dst_state = RDUniform.new()
@@ -492,13 +607,13 @@ func _create_set_stats(tex_state: RID, tex_genome: RID) -> RID:
 	var u_state = RDUniform.new()
 	u_state.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 	u_state.binding = 1
-	u_state.add_id(sampler)
+	u_state.add_id(sampler_linear)
 	u_state.add_id(tex_state)
 	
 	var u_genome = RDUniform.new()
 	u_genome.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 	u_genome.binding = 2
-	u_genome.add_id(sampler)
+	u_genome.add_id(sampler_nearest)
 	u_genome.add_id(tex_genome)
 	
 	var u_stats = RDUniform.new()
@@ -517,13 +632,13 @@ func _create_set_analysis(tex_state: RID, tex_genome: RID) -> RID:
 	var u_state = RDUniform.new()
 	u_state.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 	u_state.binding = 1
-	u_state.add_id(sampler)
+	u_state.add_id(sampler_linear)
 	u_state.add_id(tex_state)
 	
 	var u_genome = RDUniform.new()
 	u_genome.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 	u_genome.binding = 2
-	u_genome.add_id(sampler)
+	u_genome.add_id(sampler_nearest)
 	u_genome.add_id(tex_genome)
 	
 	var u_analysis = RDUniform.new()
@@ -533,7 +648,7 @@ func _create_set_analysis(tex_state: RID, tex_genome: RID) -> RID:
 	
 	return rd.uniform_set_create([u_ubo, u_state, u_genome, u_analysis], shader_analysis, 0)
 
-func _create_set_flow_conservative(src_state: RID, src_genome: RID, tex_pot: RID, dst_state: RID, dst_genome: RID) -> RID:
+func _create_set_flow_conservative(src_state: RID, src_genome: RID, src_sig: RID, tex_pot: RID, dst_state: RID, dst_genome: RID) -> RID:
 	var u_ubo = RDUniform.new()
 	u_ubo.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
 	u_ubo.binding = 0
@@ -542,19 +657,19 @@ func _create_set_flow_conservative(src_state: RID, src_genome: RID, tex_pot: RID
 	var u_src_state = RDUniform.new()
 	u_src_state.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 	u_src_state.binding = 1
-	u_src_state.add_id(sampler)
+	u_src_state.add_id(sampler_linear)
 	u_src_state.add_id(src_state)
 	
 	var u_src_genome = RDUniform.new()
 	u_src_genome.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 	u_src_genome.binding = 2
-	u_src_genome.add_id(sampler)
+	u_src_genome.add_id(sampler_nearest)
 	u_src_genome.add_id(src_genome)
 	
 	var u_pot = RDUniform.new()
 	u_pot.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 	u_pot.binding = 3
-	u_pot.add_id(sampler)
+	u_pot.add_id(sampler_linear)
 	u_pot.add_id(tex_pot)
 	
 	var u_atomic = RDUniform.new()
@@ -572,9 +687,15 @@ func _create_set_flow_conservative(src_state: RID, src_genome: RID, tex_pot: RID
 	u_dst_genome.binding = 6
 	u_dst_genome.add_id(dst_genome)
 	
-	return rd.uniform_set_create([u_ubo, u_src_state, u_src_genome, u_pot, u_atomic, u_dst_state, u_dst_genome], shader_flow_conservative, 0)
+	var u_sig = RDUniform.new()
+	u_sig.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	u_sig.binding = 7
+	u_sig.add_id(sampler_linear)
+	u_sig.add_id(src_sig)
+	
+	return rd.uniform_set_create([u_ubo, u_src_state, u_src_genome, u_pot, u_atomic, u_dst_state, u_dst_genome, u_sig], shader_flow_conservative, 0)
 
-func _create_set_normalize(tex_pot: RID, dst_genome: RID, dst_state: RID) -> RID:
+func _create_set_normalize(tex_pot: RID, dst_genome: RID, dst_state: RID, dst_sig: RID) -> RID:
 	var u_ubo = RDUniform.new()
 	u_ubo.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
 	u_ubo.binding = 0
@@ -588,13 +709,13 @@ func _create_set_normalize(tex_pot: RID, dst_genome: RID, dst_state: RID) -> RID
 	var u_pot = RDUniform.new()
 	u_pot.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 	u_pot.binding = 2
-	u_pot.add_id(sampler)
+	u_pot.add_id(sampler_linear)
 	u_pot.add_id(tex_pot)
 	
 	var u_new_genome = RDUniform.new()
 	u_new_genome.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 	u_new_genome.binding = 3
-	u_new_genome.add_id(sampler)
+	u_new_genome.add_id(sampler_nearest)
 	u_new_genome.add_id(dst_genome)
 	
 	var u_dst_state = RDUniform.new()
@@ -602,7 +723,12 @@ func _create_set_normalize(tex_pot: RID, dst_genome: RID, dst_state: RID) -> RID
 	u_dst_state.binding = 4
 	u_dst_state.add_id(dst_state)
 	
-	return rd.uniform_set_create([u_ubo, u_atomic, u_pot, u_new_genome, u_dst_state], shader_normalize, 0)
+	var u_dst_sig = RDUniform.new()
+	u_dst_sig.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	u_dst_sig.binding = 5
+	u_dst_sig.add_id(dst_sig)
+	
+	return rd.uniform_set_create([u_ubo, u_atomic, u_pot, u_new_genome, u_dst_state, u_dst_sig], shader_normalize, 0)
 
 # === PUBLIC API ===
 
@@ -616,6 +742,9 @@ func clear_simulation():
 	rd.texture_clear(tex_state_b, Color(0,0,0,0), 0, 1, 0, 1)
 	rd.texture_clear(tex_genome_a, Color(0,0,0,0), 0, 1, 0, 1)
 	rd.texture_clear(tex_genome_b, Color(0,0,0,0), 0, 1, 0, 1)
+	rd.texture_clear(tex_signal_a, Color(0,0,0,0), 0, 1, 0, 1)
+	rd.texture_clear(tex_signal_b, Color(0,0,0,0), 0, 1, 0, 1)
+	rd.barrier(RenderingDevice.BARRIER_MASK_COMPUTE)
 
 func set_parameter(name: String, value: float):
 	if params.has(name):
@@ -639,15 +768,9 @@ func get_species_info_at(uv: Vector2) -> Dictionary:
 	var gy = int(uv.y * 64.0)
 	if gx < 0 or gx >= 64 or gy < 0 or gy >= 64: return {}
 	
-	var idx = (gy * 64 + gx) * 8 # 8 floats per cell
-	if idx + 7 >= last_analysis_bytes.size() / 4: return {} # Float32 array index check
+	var idx = (gy * 64 + gx) * 10 # 10 floats per cell
+	if idx + 8 >= last_analysis_bytes.size() / 4: return {} 
 	
-	# Read from bytes manually (slower than Array access but fine for 1 lookup)
-	# Actually bytes.to_float32_array() creates copy. Slow if done every frame?
-	# Better to cache FloatArray?
-	# Let's decode just the chunk we need using stream buffer wrapper or just to_float32_array ONCE in _process.
-	# But that takes memory? 131kb is small.
-	# I'll optimize later. For now, create array from cached bytes.
 	var floats = last_analysis_bytes.to_float32_array()
 	var base = idx
 	
@@ -660,18 +783,20 @@ func get_species_info_at(uv: Vector2) -> Dictionary:
 	var flow = floats[base+4]
 	var aff = floats[base+5]
 	var lam = floats[base+6]
+	var sec = floats[base+7]
+	var per = floats[base+8]
 	
 	var info = {
 		"mu": mu, "sigma": sig,
 		"radius": rad, "flow": flow,
 		"affinity": aff, "lambda": lam,
+		"secretion": sec, "perception": per,
 		"mass": m
 	}
 	
 	# Find matching species in last_species_list
 	for s in last_species_list:
-		# Use genes logic
-		if abs(s.genes["mu"] - mu) + abs(s.genes["sigma"] - sig) < 0.15:
+		if SpeciesTracker.get_gene_distance(s.genes, info) < SpeciesTracker.GENE_SIMILARITY_THRESHOLD:
 			info["id"] = s.id
 			info["name"] = s.name
 			info["color"] = s.color
@@ -692,6 +817,12 @@ func _input(event):
 			camera_zoom = min(camera_zoom * 1.1, 20.0)
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			camera_zoom = max(camera_zoom * 0.9, 0.1)
+		elif event.button_index == MOUSE_BUTTON_RIGHT:
+			is_inspecting = event.pressed
+			if not is_inspecting:
+				# Clear highlight/tooltip when released
+				set_highlight_genes({}, false)
+				emit_signal("species_hovered", {})
 			
 	elif event is InputEventMouseMotion:
 		if is_dragging:
@@ -699,8 +830,8 @@ func _input(event):
 			var delta = (event.position - last_mouse_pos) / viewport_size.y
 			camera_pos -= delta / camera_zoom
 			last_mouse_pos = event.position
-		else:
-			# Hover Logic
+		elif is_inspecting:
+			# Hover Logic (Only if right-clicking)
 			var viewport_size = get_viewport().get_visible_rect().size
 			var aspect = viewport_size.x / viewport_size.y
 			var uv = event.position / viewport_size

@@ -50,7 +50,7 @@ uint pcg_hash_1d(uint v) {
 }
 
 vec2 unpack2(float packed) {
-    uint bits = floatBitsToUint(packed);
+    uint bits = floatBitsToUint(packed) & ~0x40000000u; // Clear normalization bit
     float a = float((bits >> 15u) & 0x7FFFu) / 32767.0;
     float b = float(bits & 0x7FFFu) / 32767.0;
     return vec2(a, b);
@@ -110,11 +110,26 @@ void main() {
     // if (finalMass < 0.001) finalMass = 0.0;
     
     // 5. Secretion (Optional signaling component)
+    // 5. Secretion (Optional signaling component) - RGB VECTOR IMPLEMENTATION
     if (finalMass > 0.05) {
-        float currentSignal = imageLoad(img_new_signal, uv_i).r;
-        float addedSignal = g_secretion * finalMass * p.u_dt * 0.5;
-        float nextSignal = clamp(currentSignal + addedSignal, 0.0, 2.0);
-        imageStore(img_new_signal, uv_i, vec4(nextSignal, 0.0, 0.0, 0.0));
+        // Unpack genes to create Sensory Identity Vector
+        vec2 mu_sigma = unpack2(finalGenome.r);
+        vec2 radius_flow = unpack2(finalGenome.g);
+        vec2 affinity_lambda = unpack2(finalGenome.b);
+        
+        // Identity Vector: Mu (Physiology), Flow (Movement), Affinity (Structure)
+        vec3 identityVec = vec3(mu_sigma.x, radius_flow.y, affinity_lambda.x);
+        
+        vec4 currentSignal = imageLoad(img_new_signal, uv_i);
+        
+        // Emit vector signal: Amount = mass * secretion * identity
+        vec3 addedSignal = identityVec * (finalMass * g_secretion * p.u_dt * 0.5);
+        
+        // Add to existing signal and decay/clamp
+        vec3 nextSignal = currentSignal.rgb + addedSignal;
+        nextSignal = clamp(nextSignal, 0.0, 2.0); // Allow some saturation
+        
+        imageStore(img_new_signal, uv_i, vec4(nextSignal, 0.0));
     }
     
     imageStore(img_new_state, uv_i, vec4(finalMass, velocity, age));

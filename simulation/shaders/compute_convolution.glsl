@@ -35,7 +35,7 @@ layout(set = 0, binding = 3) uniform sampler2D tex_signal;
 layout(set = 0, binding = 4, rgba32f) uniform image2D img_potential;
 
 vec2 unpack2(float packed) {
-    uint bits = floatBitsToUint(packed);
+    uint bits = floatBitsToUint(packed) & ~0x40000000u; // Clear the forced normalization bit
     float a = float((bits >> 15u) & 0x7FFFu) / 32767.0;
     float b = float(bits & 0x7FFFu) / 32767.0;
     return vec2(a, b);

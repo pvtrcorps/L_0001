@@ -65,7 +65,7 @@ uint pcg_hash_1d(uint v) {
 }
 
 vec2 unpack2(float packed) {
-    uint bits = floatBitsToUint(packed);
+    uint bits = floatBitsToUint(packed) & ~0x40000000u; // Clear normalization bit
     float a = float((bits >> 15u) & 0x7FFFu) / 32767.0;
     float b = float(bits & 0x7FFFu) / 32767.0;
     return vec2(a, b);
@@ -125,9 +125,12 @@ void main() {
     vec2 gradU = potential.gb; 
     float g_prime = potential.a; // Growth force (G'(U))
     
-    // === SIGNAL GRADIENT (Chemotaxis) ===
+    // === SIGNAL GRADIENT (Chemotaxis - VECTOR SPACE) ===
     vec2 signalGrad = vec2(0.0);
     ivec2 res_i = ivec2(p.u_res);
+    
+    // Construct My Identity Vector (Same as in Normalize shader)
+    vec3 myIdentityVec = vec3(mu_sigma.x, radius_flow.y, affinity_lambda.x);
     
     // Helper for wrapping texelFetch
     ivec2 l_uv = (uv_i + ivec2(-1, 0) + res_i) % res_i;
@@ -135,11 +138,20 @@ void main() {
     ivec2 u_uv = (uv_i + ivec2(0, -1) + res_i) % res_i;
     ivec2 d_uv = (uv_i + ivec2(0, 1) + res_i) % res_i;
     
-    float sL = texelFetch(tex_signal, l_uv, 0).r;
-    float sR = texelFetch(tex_signal, r_uv, 0).r;
-    float sU = texelFetch(tex_signal, u_uv, 0).r;
-    float sD = texelFetch(tex_signal, d_uv, 0).r;
-    signalGrad = vec2(sR - sL, sD - sU);
+    // Read RGB Signal vectors
+    vec3 sL = texelFetch(tex_signal, l_uv, 0).rgb;
+    vec3 sR = texelFetch(tex_signal, r_uv, 0).rgb;
+    vec3 sU = texelFetch(tex_signal, u_uv, 0).rgb;
+    vec3 sD = texelFetch(tex_signal, d_uv, 0).rgb;
+    
+    // Calculate SIMILARITY (Dot Product)
+    float simL = dot(sL, myIdentityVec);
+    float simR = dot(sR, myIdentityVec);
+    float simU = dot(sU, myIdentityVec);
+    float simD = dot(sD, myIdentityVec);
+    
+    // Gradient of Similarity: Go towards signals that smell like me (or opposite)
+    signalGrad = vec2(simR - simL, simD - simU);
     
     // === FLOW LENIA VELOCITY ===
     // === DENSITY GRADIENT (Repulsion / Pressure) ===

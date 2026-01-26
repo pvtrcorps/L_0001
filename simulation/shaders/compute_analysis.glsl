@@ -37,7 +37,7 @@ layout(set = 0, binding = 3, std430) buffer Analysis {
 } a;
 
 vec2 unpack2(float packed) {
-    uint bits = floatBitsToUint(packed);
+    uint bits = floatBitsToUint(packed) & ~0x40000000u; // Clear normalization bit
     float a = float((bits >> 15u) & 0x7FFFu) / 32767.0;
     float b = float(bits & 0x7FFFu) / 32767.0;
     return vec2(a, b);

@@ -16,7 +16,7 @@ vec3 hsv2rgb(vec3 c) {
 
 // Unpack two [0,1] floats from packed representation
 vec2 unpack2(float packed) {
-    uint bits = floatBitsToUint(packed);
+    uint bits = floatBitsToUint(packed) & ~0x40000000u; // Clear normalization bit
     float a = float((bits >> 15u) & 0x7FFFu) / 32767.0;
     float b = float(bits & 0x7FFFu) / 32767.0;
     return vec2(a, b);
@@ -38,14 +38,22 @@ vec3 get_pixel_color(ivec2 coords, vec2 tex_size) {
     vec2 affinity_lambda = unpack2(genome.b);
     float g_affinity = affinity_lambda.x;
     
-    // Color mapping logic (same as before)
-    float hue = g_mu + g_affinity * 0.15;
-    float saturation = 0.5 + g_sigma * 0.5;
-    // Note: We don't multiply by mass here, we just want the base species color.
-    // Brightness/Alpha will be handled by the interpolated mass later.
-    float val = 1.0; 
+    // Color mapping logic - UNIFIED with Signal Vector
+    // Signal Vector was: vec3(g_mu, g_flow, g_affinity)
+    vec2 radius_flow = unpack2(genome.g);
+    float g_flow = radius_flow.y;
     
-    return hsv2rgb(vec3(hue, saturation, val));
+    // Direct RGB Mapping to match the "Scent"
+    // R = Mu (Growth/Physiology)
+    // G = Flow (Velocity/Movement)
+    // B = Affinity (Structure/Social)
+    vec3 col = vec3(g_mu, g_flow, g_affinity);
+    
+    // Boost saturation slightly so they don't look too dark/gray
+    col = pow(col, vec3(0.8)); 
+    col *= 1.2;
+    
+    return col;
 }
 
 void fragment() {
@@ -77,7 +85,7 @@ void fragment() {
     
     vec4 state = texture(tex_state, uv);
     float mass = state.r;
-    float signal = texture(tex_signal, uv).r;
+    vec3 signal = texture(tex_signal, uv).rgb;
     
     // Manual Bilinear Interpolation for Genome Color
     vec2 tex_size = vec2(textureSize(tex_genome, 0));
@@ -99,9 +107,10 @@ void fragment() {
     vec3 col = col_base * clamp(brightness, 0.0, 1.0);
     col *= smoothstep(0.0, 0.05, mass);
     
-    // Signal layer visualization (Subtle Purple/Cyan Glow)
-    vec3 signal_col = vec3(0.5, 0.0, 1.0) * signal * 0.3; // Purple glow
-    col += signal_col;
+    // Signal layer visualization (Full RGB)
+    // Add signal using LIGHTEN blend mode (max) instead of Additive
+    vec3 signal_col = signal * 0.5; // Boost slightly as Lighten doesn't accumulate brightness
+    col = max(col, signal_col);
     
     // Highlight Logic
     // Re-sample central genome for selection logic (Nearest Neighbor)
@@ -137,7 +146,7 @@ void fragment() {
     col = col / (1.0 + col);
     col = pow(col, vec3(0.85));
     
-    if (mass < 0.01 && signal < 0.05) {
+    if (mass < 0.01 && length(signal) < 0.05) {
         col = vec3(0.0);
     }
     

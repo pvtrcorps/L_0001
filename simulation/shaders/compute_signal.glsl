@@ -39,30 +39,36 @@ void main() {
     vec2 px = 1.0 / p.u_res;
     vec2 uv = (vec2(uv_i) + 0.5) * px;
     
-    // 3x3 Laplacian Diffusion
-    float center = texture(tex_signal_src, uv).r;
-    float laplacian = 0.0;
+    // 3x3 Laplacian Diffusion (RGB Vector)
+    vec3 center = texture(tex_signal_src, uv).rgb;
+    vec3 laplacian = vec3(0.0);
     
     // Neighbors (cardinal + ordinal)
-    laplacian += texture(tex_signal_src, uv + vec2(px.x, 0.0)).r;
-    laplacian += texture(tex_signal_src, uv + vec2(-px.x, 0.0)).r;
-    laplacian += texture(tex_signal_src, uv + vec2(0.0, px.y)).r;
-    laplacian += texture(tex_signal_src, uv + vec2(0.0, -px.y)).r;
+    laplacian += texture(tex_signal_src, uv + vec2(px.x, 0.0)).rgb;
+    laplacian += texture(tex_signal_src, uv + vec2(-px.x, 0.0)).rgb;
+    laplacian += texture(tex_signal_src, uv + vec2(0.0, px.y)).rgb;
+    laplacian += texture(tex_signal_src, uv + vec2(0.0, -px.y)).rgb;
     
-    laplacian += texture(tex_signal_src, uv + vec2(px.x, px.y)).r * 0.5;
-    laplacian += texture(tex_signal_src, uv + vec2(-px.x, px.y)).r * 0.5;
-    laplacian += texture(tex_signal_src, uv + vec2(px.x, -px.y)).r * 0.5;
-    laplacian += texture(tex_signal_src, uv + vec2(-px.x, -px.y)).r * 0.5;
+    laplacian += texture(tex_signal_src, uv + vec2(px.x, px.y)).rgb * 0.5;
+    laplacian += texture(tex_signal_src, uv + vec2(-px.x, px.y)).rgb * 0.5;
+    laplacian += texture(tex_signal_src, uv + vec2(px.x, -px.y)).rgb * 0.5;
+    laplacian += texture(tex_signal_src, uv + vec2(-px.x, -px.y)).rgb * 0.5;
     
     laplacian = (laplacian / 6.0) - center;
     
-    float next_signal = center + (laplacian * p.u_signal_diff * p.u_dt);
+    vec3 next_signal = center + (laplacian * p.u_signal_diff * p.u_dt);
     
-    // Decay
-    next_signal *= (1.0 - p.u_signal_decay * p.u_dt);
+    // Quadratic Decay (Second-Order Kinetics)
+    // dS/dt = -k * S^2
+    // High concentrations decay much faster than low concentrations.
+    // We add a specific 'quadratic_factor' or just reuse u_signal_decay.
+    // To keep it controllable with existing slider [0..1], we scale it.
+    
+    vec3 decay_amount = (next_signal * next_signal) * p.u_signal_decay * p.u_dt * 5.0;
+    next_signal -= decay_amount;
     
     // Clamp to prevent negative noise
-    next_signal = max(0.0, next_signal);
+    next_signal = max(vec3(0.0), next_signal);
     
-    imageStore(img_signal_dst, uv_i, vec4(next_signal, 0.0, 0.0, 0.0));
+    imageStore(img_signal_dst, uv_i, vec4(next_signal, 0.0));
 }

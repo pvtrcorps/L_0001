@@ -39,7 +39,8 @@ float hash(vec2 pt) {
 float pack2(float a, float b) {
     uint ia = uint(clamp(a, 0.0, 1.0) * 32767.0);
     uint ib = uint(clamp(b, 0.0, 1.0) * 32767.0);
-    return uintBitsToFloat((ia << 15) | ib);
+    // Force bit 30 (0x40000000) to ensure Exponent is non-zero (Normalized Float)
+    return uintBitsToFloat((ia << 15) | ib | 0x40000000u);
 }
 
 void main() {

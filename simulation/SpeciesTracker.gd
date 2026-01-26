@@ -51,10 +51,17 @@ class Species:
 		}
 		
 		# Calculate Color
-		var h = genes["mu"]
-		var s = 0.5 + genes["sigma"] * 0.5
-		var v = 1.0 
-		color = Color.from_hsv(h, s, v)
+		# Calculate Color (RGB Vector Mapping)
+		var r = genes["mu"]
+		var g = genes["flow"]
+		var b = genes["affinity"]
+		
+		# Boost saturation to match shader aesthetics
+		r = pow(r, 0.8) * 1.2
+		g = pow(g, 0.8) * 1.2
+		b = pow(b, 0.8) * 1.2
+		
+		color = Color(r, g, b, 1.0)
 		
 		_generate_name()
 

@@ -48,12 +48,12 @@ var params = {
 var rd: RenderingDevice
 var shader_init: RID
 var shader_conv: RID
-var shader_flow: RID
+
 var shader_stats: RID
 var shader_signal: RID # [NEW]
 var pipeline_init: RID
 var pipeline_conv: RID
-var pipeline_flow: RID
+
 var pipeline_stats: RID
 var pipeline_analysis: RID
 var pipeline_flow_conservative: RID
@@ -566,43 +566,7 @@ func _create_set_conv(src_state: RID, src_genome: RID, src_sig: RID, dst_potenti
 	
 	return rd.uniform_set_create([u_ubo, u_state, u_genome, u_sig, u_potential], shader_conv, 0)
 
-func _create_set_flow(src_state: RID, src_genome: RID, src_potential: RID, 
-					  dst_state: RID, dst_genome: RID) -> RID:
-	var u_ubo = RDUniform.new()
-	u_ubo.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
-	u_ubo.binding = 0
-	u_ubo.add_id(ubo)
-	
-	var u_src_state = RDUniform.new()
-	u_src_state.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-	u_src_state.binding = 1
-	u_src_state.add_id(sampler_linear)
-	u_src_state.add_id(src_state)
-	
-	var u_src_genome = RDUniform.new()
-	u_src_genome.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-	u_src_genome.binding = 2
-	u_src_genome.add_id(sampler_nearest)
-	u_src_genome.add_id(src_genome)
-	
-	var u_src_potential = RDUniform.new()
-	u_src_potential.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-	u_src_potential.binding = 3
-	u_src_potential.add_id(sampler_linear)
-	u_src_potential.add_id(src_potential)
-	
-	var u_dst_state = RDUniform.new()
-	u_dst_state.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
-	u_dst_state.binding = 4
-	u_dst_state.add_id(dst_state)
-	
-	var u_dst_genome = RDUniform.new()
-	u_dst_genome.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
-	u_dst_genome.binding = 5
-	u_dst_genome.add_id(dst_genome)
-	
-	return rd.uniform_set_create([u_ubo, u_src_state, u_src_genome, u_src_potential, 
-								  u_dst_state, u_dst_genome], shader_flow, 0)
+
 
 func _create_set_stats(tex_state: RID, tex_genome: RID) -> RID:
 	var u_ubo = RDUniform.new()

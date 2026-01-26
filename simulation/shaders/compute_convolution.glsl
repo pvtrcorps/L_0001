@@ -65,13 +65,31 @@ float kernel(float r, float g_mu, float g_sigma, float g_radius, float g_affinit
     return k1 + k2 + k3;
 }
 
+// Convert hue [0,1] to RGB using HSV with S=1, V=1
+vec3 HueToRGB(float hue) {
+    float h = hue * 6.0;
+    float c = 1.0;  // Chroma (S*V = 1*1)
+    float x = c * (1.0 - abs(mod(h, 2.0) - 1.0));
+    
+    vec3 rgb;
+    if (h < 1.0)      rgb = vec3(c, x, 0.0);
+    else if (h < 2.0) rgb = vec3(x, c, 0.0);
+    else if (h < 3.0) rgb = vec3(0.0, c, x);
+    else if (h < 4.0) rgb = vec3(0.0, x, c);
+    else if (h < 5.0) rgb = vec3(x, 0.0, c);
+    else              rgb = vec3(c, 0.0, x);
+    
+    return rgb;
+}
+
 void main() {
     ivec2 uv_i = ivec2(gl_GlobalInvocationID.xy);
     if (uv_i.x >= int(p.u_res.x) || uv_i.y >= int(p.u_res.y)) return;
     
     vec2 uv = (vec2(uv_i) + 0.5) / p.u_res;
+    ivec2 res_i = ivec2(p.u_res);
     
-    // Genome Unpacking (8 Genes)
+    // Genome Unpacking (8 Genes from genome texture)
     vec4 g_tex = texture(tex_genome, uv);
     vec2 mu_sigma = unpack2(g_tex.r);
     float g_mu = mu_sigma.x;
@@ -83,12 +101,37 @@ void main() {
     vec2 affinity_lambda = unpack2(g_tex.b);
     float g_affinity = affinity_lambda.x;
     
-    vec2 secre_percep = unpack2(g_tex.a);
-    float g_perception = secre_percep.y;
+    // Read Spectral Genes from state.a
+    vec4 state = texture(tex_state, uv);
+    vec2 spectral_genes = unpack2(state.a);
+    float g_detection_hue = spectral_genes.y;  // Hue this species seeks
     
-    // Read Signal
-    float signal_val = texture(tex_signal, uv).r;
+    // === SPECTRAL SIGNAL DETECTION ===
+    vec3 myDetector = HueToRGB(g_detection_hue);
     
+    // Read local signal and compute similarity
+    vec3 signalVec = texture(tex_signal, uv).rgb;
+    float U_signal = dot(signalVec, myDetector);  // Spectral similarity [-1, 1] -> [0, 3] for pure colors
+    
+    // Compute signal gradient using central differences
+    ivec2 l_uv = (uv_i + ivec2(-1, 0) + res_i) % res_i;
+    ivec2 r_uv = (uv_i + ivec2(1, 0) + res_i) % res_i;
+    ivec2 u_uv = (uv_i + ivec2(0, -1) + res_i) % res_i;
+    ivec2 d_uv = (uv_i + ivec2(0, 1) + res_i) % res_i;
+    
+    vec3 sL = texelFetch(tex_signal, l_uv, 0).rgb;
+    vec3 sR = texelFetch(tex_signal, r_uv, 0).rgb;
+    vec3 sU = texelFetch(tex_signal, u_uv, 0).rgb;
+    vec3 sD = texelFetch(tex_signal, d_uv, 0).rgb;
+    
+    // Gradient of spectral similarity
+    float simL = dot(sL, myDetector);
+    float simR = dot(sR, myDetector);
+    float simU = dot(sU, myDetector);
+    float simD = dot(sD, myDetector);
+    vec2 gradSignal = vec2(simR - simL, simD - simU);
+    
+    // === MASS CONVOLUTION (U_growth) ===
     float R_max = p.u_R * 1.6;
     int maxR = int(R_max) + 1;
     
@@ -103,9 +146,7 @@ void main() {
             
             float w = kernel(r, g_mu, g_sigma, g_radius, g_affinity);
             if (w > 0.0) {
-            if (w > 0.0) {
                 // Precise Integer Sampling to avoid sub-pixel drift
-                ivec2 res_i = ivec2(p.u_res);
                 ivec2 neighbor_coord = (uv_i + ivec2(dx, dy) + res_i) % res_i; // True Torus Wrap
                 
                 // Use texelFetch instead of texture(linear)
@@ -119,23 +160,25 @@ void main() {
                     weightedGradient += dir * neighborMass * w;
                 }
             }
-            }
         }
     }
     
-    float U = (totalWeight > 0.0) ? sum / totalWeight : 0.0;
+    float U_growth = (totalWeight > 0.0) ? sum / totalWeight : 0.0;
     
-    // Growth derivative approximation G'(U)
-    // For G(U) = 2*exp(-0.5*((U-mu)/sigma)^2) - 1
+    // Growth derivative approximation G'(U) for Flow Lenia
+    // G(U) = 2*exp(-0.5*((U-mu)/sigma)^2) - 1
     // G'(U) = -2 * ((U-mu)/sigma^2) * exp(-0.5*((U-mu)/sigma)^2)
     float optimalU = 0.15 + g_mu * 0.35; 
     float tolerance = 0.03 + g_sigma * 0.12;
-    float diff = (U - optimalU);
+    float diff = (U_growth - optimalU);
     float g_prime = -2.0 * (diff / max(tolerance * tolerance, 0.0001)) * exp(-0.5 * (diff * diff) / max(tolerance * tolerance, 0.0001));
     
-    vec2 gradU = (totalWeight > 0.0) ? weightedGradient / totalWeight : vec2(0.0);
+    vec2 gradU_growth = (totalWeight > 0.0) ? weightedGradient / totalWeight : vec2(0.0);
     
-    // Store U in R, G' (growth force) in G, and keep original gradU in B,A or pack it
-    // Actually, let's just use R for U and GB for gradU. The flow shader will compute G'.
-    imageStore(img_potential, uv_i, vec4(U, gradU, g_prime));
+    // === OUTPUT ===
+    // R: U_growth (for growth function G(U))
+    // GB: gradU_growth (mass gradient for flow)
+    // A: U_signal (spectral similarity for chemotaxis)
+    // Note: gradSignal will be computed in flow shader from neighbors' U_signal values
+    imageStore(img_potential, uv_i, vec4(U_growth, gradU_growth, U_signal));
 }

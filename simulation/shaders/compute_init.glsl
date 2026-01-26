@@ -62,7 +62,7 @@ void main() {
         density = smoothstep(0.4, 0.2, d);
     }
     
-    // 2. Genome Generation (8 Genes)
+    // 2. Genome Generation (8 Base Genes + 2 Spectral Genes)
     // Species-specific base genome per cluster
     vec2 species_seed = vec2(cell_x, cell_y) + p.u_seed;
     
@@ -75,7 +75,11 @@ void main() {
     float g_secretion = mix(p.u_range_secretion.x, p.u_range_secretion.y, hash(species_seed + 7.0));
     float g_perception = mix(p.u_range_perception.x, p.u_range_perception.y, hash(species_seed + 8.0));
     
-    // Pack 8 genes into RGBA32F
+    // Spectral Genes (for chemotaxis signaling)
+    float g_emission_hue = hash(species_seed + 9.0);   // [0, 1] hue of emitted signal
+    float g_detection_hue = hash(species_seed + 10.0); // [0, 1] hue this species seeks
+    
+    // Pack 8 base genes into RGBA32F (genome texture)
     vec4 packedGenome = vec4(
         pack2(g_mu, g_sigma),
         pack2(g_radius, g_flow),
@@ -83,8 +87,10 @@ void main() {
         pack2(g_secretion, g_perception)
     );
     
-    imageStore(img_state, uv_i, vec4(density, 0.0, 0.0, 0.0));
-    imageStore(img_state, uv_i, vec4(density, 0.0, 0.0, 0.0));
+    // Pack spectral genes into state.a (replaces age tracking)
+    float packedSpectral = pack2(g_emission_hue, g_detection_hue);
+    
+    imageStore(img_state, uv_i, vec4(density, 0.0, 0.0, packedSpectral));
     // Write genome everywhere in the cluster to prevent "Void Border" artifacts
     // when using bilinear sampling for mass but nearest for genome.
     imageStore(img_genome, uv_i, packedGenome);

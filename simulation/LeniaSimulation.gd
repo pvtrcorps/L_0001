@@ -272,7 +272,7 @@ func _dispatch_step():
 	var key_norm = "norm_" + str(ping_pong)
 	var set_norm = set_cache.get(key_norm)
 	if not set_norm or not set_norm.is_valid():
-		set_norm = _create_set_normalize(tex_potential, src_genome, dst_state, dst_signal, dst_genome)
+		set_norm = _create_set_normalize(tex_potential, src_state, src_genome, dst_state, dst_signal, dst_genome)
 		set_cache[key_norm] = set_norm
 	
 	var compute_list_norm = rd.compute_list_begin()
@@ -670,7 +670,7 @@ func _create_set_flow_conservative(src_state: RID, src_genome: RID, src_sig: RID
 	
 	return rd.uniform_set_create([u_ubo, u_src_state, u_src_genome, u_pot, u_atomic, u_dst_state, u_dst_genome, u_sig, u_winner], shader_flow_conservative, 0)
 
-func _create_set_normalize(tex_pot: RID, old_genome: RID, dst_state: RID, dst_sig: RID, dst_genome: RID) -> RID:
+func _create_set_normalize(tex_pot: RID, old_state: RID, old_genome: RID, dst_state: RID, dst_sig: RID, dst_genome: RID) -> RID:
 	var u_ubo = RDUniform.new()
 	u_ubo.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
 	u_ubo.binding = 0
@@ -686,6 +686,12 @@ func _create_set_normalize(tex_pot: RID, old_genome: RID, dst_state: RID, dst_si
 	u_pot.binding = 2
 	u_pot.add_id(sampler_linear)
 	u_pot.add_id(tex_pot)
+	
+	var u_old_state = RDUniform.new()
+	u_old_state.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	u_old_state.binding = 3
+	u_old_state.add_id(sampler_nearest)  # Use nearest for precise gene transfer
+	u_old_state.add_id(old_state)
 	
 	var u_dst_state = RDUniform.new()
 	u_dst_state.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
@@ -713,7 +719,7 @@ func _create_set_normalize(tex_pot: RID, old_genome: RID, dst_state: RID, dst_si
 	u_old_genome.add_id(sampler_nearest)
 	u_old_genome.add_id(old_genome)
 	
-	return rd.uniform_set_create([u_ubo, u_atomic, u_pot, u_dst_state, u_dst_sig, u_winner, u_new_genome, u_old_genome], shader_normalize, 0)
+	return rd.uniform_set_create([u_ubo, u_atomic, u_pot, u_old_state, u_dst_state, u_dst_sig, u_winner, u_new_genome, u_old_genome], shader_normalize, 0)
 
 # === PUBLIC API ===
 
@@ -754,7 +760,7 @@ func get_species_info_at(uv: Vector2) -> Dictionary:
 	if gx < 0 or gx >= 64 or gy < 0 or gy >= 64: return {}
 	
 	var idx = (gy * 64 + gx) * 10 # 10 floats per cell
-	if (idx + 8) * 4 >= last_analysis_bytes.size(): return {} 
+	if (idx + 9) * 4 >= last_analysis_bytes.size(): return {} 
 	
 	var floats = last_analysis_bytes.to_float32_array()
 	var base = idx
@@ -767,15 +773,22 @@ func get_species_info_at(uv: Vector2) -> Dictionary:
 	var rad = floats[base+3]
 	var flow = floats[base+4]
 	var aff = floats[base+5]
-	var den = floats[base+6] # Was lambda
+	var den = floats[base+6]
 	var sec = floats[base+7]
 	var per = floats[base+8]
+	
+	# Parse spectral hues from packed slot 9
+	var packed_spectral = floats[base+9]
+	var emission_hue = fmod(packed_spectral, 1.0)
+	var detection_hue = (packed_spectral - emission_hue) / 0.001
+	detection_hue = clamp(detection_hue, 0.0, 1.0)
 	
 	var info = {
 		"mu": mu, "sigma": sig,
 		"radius": rad, "flow": flow,
 		"affinity": aff, "density_tol": den,
 		"secretion": sec, "perception": per,
+		"emission_hue": emission_hue, "detection_hue": detection_hue,
 		"mass": m
 	}
 	

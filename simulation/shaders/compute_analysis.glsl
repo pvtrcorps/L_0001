@@ -59,6 +59,11 @@ void main() {
     vec2 affinity_lambda = unpack2(g.b);
     vec2 secre_percep = unpack2(g.a);
     
+    // Spectral genes are stored in state.a
+    vec2 spectral_genes = unpack2(state.a);
+    float emission_hue = spectral_genes.x;
+    float detection_hue = spectral_genes.y;
+    
     uint base = (idx_y * 64 + idx_x) * 10;
     
     a.data[base + 0] = state.r; // Mass
@@ -67,8 +72,8 @@ void main() {
     a.data[base + 3] = radius_flow.x; // radius
     a.data[base + 4] = radius_flow.y; // flow
     a.data[base + 5] = affinity_lambda.x; // affinity
-    a.data[base + 6] = affinity_lambda.y; // lambda
+    a.data[base + 6] = affinity_lambda.y; // lambda (density_tol)
     a.data[base + 7] = secre_percep.x; // secretion
     a.data[base + 8] = secre_percep.y; // perception
-    a.data[base + 9] = 0.0; // pad
+    a.data[base + 9] = emission_hue + detection_hue * 0.001; // Pack spectral hues (hue + detection*1e-3)
 }

@@ -16,7 +16,8 @@ class Species:
 	var genes_sum = {
 		"mu": 0.0, "sigma": 0.0, "radius": 0.0, 
 		"flow": 0.0, "affinity": 0.0, "density_tol": 0.0,
-		"secretion": 0.0, "perception": 0.0
+		"secretion": 0.0, "perception": 0.0,
+		"emission_hue": 0.0, "detection_hue": 0.0
 	}
 	
 	# Current Average Genes
@@ -24,7 +25,7 @@ class Species:
 	var color: Color
 	var name: String = "Unknown"
 	
-	func add_sample(mu, sig, rad, flow, aff, den, sec, per, m):
+	func add_sample(mu, sig, rad, flow, aff, den, sec, per, em_hue, det_hue, m):
 		area += 1
 		mass += m
 		genes_sum["mu"] += mu
@@ -35,6 +36,8 @@ class Species:
 		genes_sum["density_tol"] += den
 		genes_sum["secretion"] += sec
 		genes_sum["perception"] += per
+		genes_sum["emission_hue"] += em_hue
+		genes_sum["detection_hue"] += det_hue
 		
 	func finalize():
 		if area == 0: return
@@ -47,7 +50,9 @@ class Species:
 			"affinity": genes_sum["affinity"] / n,
 			"density_tol": genes_sum["density_tol"] / n,
 			"secretion": genes_sum["secretion"] / n,
-			"perception": genes_sum["perception"] / n
+			"perception": genes_sum["perception"] / n,
+			"emission_hue": genes_sum["emission_hue"] / n,
+			"detection_hue": genes_sum["detection_hue"] / n
 		}
 		
 		# Calculate Color
@@ -140,7 +145,13 @@ func find_species(byte_data: PackedByteArray) -> Array:
 		var m = floats[base]
 		if m <= MASS_THRESHOLD: continue
 		
-		# Current cell genes as array
+		# Parse spectral hues from packed slot 9: emission + detection*0.001
+		var packed_spectral = floats[base+9]
+		var emission_hue = fmod(packed_spectral, 1.0)
+		var detection_hue = (packed_spectral - emission_hue) / 0.001
+		detection_hue = clamp(detection_hue, 0.0, 1.0)
+		
+		# Current cell genes as array (8 base genes)
 		var cg = PackedFloat32Array([
 			floats[base+1], floats[base+2], floats[base+3], floats[base+4],
 			floats[base+5], floats[base+6], floats[base+7], floats[base+8]
@@ -158,12 +169,16 @@ func find_species(byte_data: PackedByteArray) -> Array:
 				if d < 0.02: break # "Close enough" exit
 		
 		if best_match_idx != -1:
-			species_list[best_match_idx].add_sample(cg[0], cg[1], cg[2], cg[3], cg[4], cg[5], cg[6], cg[7], m)
+			species_list[best_match_idx].add_sample(cg[0], cg[1], cg[2], cg[3], cg[4], cg[5], cg[6], cg[7], emission_hue, detection_hue, m)
 		elif species_list.size() < 64: # Hard cap on species count
 			var s = Species.new()
 			s.id = species_list.size() + 1
-			s.genes = { "mu": cg[0], "sigma": cg[1], "radius": cg[2], "flow": cg[3], "affinity": cg[4], "density_tol": cg[5], "secretion": cg[6], "perception": cg[7] }
-			s.add_sample(cg[0], cg[1], cg[2], cg[3], cg[4], cg[5], cg[6], cg[7], m)
+			s.genes = { 
+				"mu": cg[0], "sigma": cg[1], "radius": cg[2], "flow": cg[3], 
+				"affinity": cg[4], "density_tol": cg[5], "secretion": cg[6], "perception": cg[7],
+				"emission_hue": emission_hue, "detection_hue": detection_hue
+			}
+			s.add_sample(cg[0], cg[1], cg[2], cg[3], cg[4], cg[5], cg[6], cg[7], emission_hue, detection_hue, m)
 			species_list.append(s)
 			species_genes.append(cg)
 	

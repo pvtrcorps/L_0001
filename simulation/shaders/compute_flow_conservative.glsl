@@ -122,85 +122,67 @@ void main() {
     float g_perception = secre_percep.y;
     
     vec4 potential = texture(tex_potential, uv);
-    vec2 gradU = potential.gb; 
-    float g_prime = potential.a; // Growth force (G'(U))
+    float U_growth = potential.r;     // Mass convolution result
+    vec2 gradU_mass = potential.gb;   // Gradient of mass potential
+    float U_signal = potential.a;     // Spectral similarity at this pixel
     
-    // === SIGNAL GRADIENT (Chemotaxis - VECTOR SPACE) ===
-    vec2 signalGrad = vec2(0.0);
+    // === SPECTRAL SIGNAL GRADIENT ===
+    // Compute gradient of U_signal from neighboring pixels
     ivec2 res_i = ivec2(p.u_res);
-    
-    // Construct My Identity Vector (Same as in Normalize shader)
-    vec3 myIdentityVec = vec3(mu_sigma.x, radius_flow.y, affinity_lambda.x);
-    
-    // Helper for wrapping texelFetch
     ivec2 l_uv = (uv_i + ivec2(-1, 0) + res_i) % res_i;
     ivec2 r_uv = (uv_i + ivec2(1, 0) + res_i) % res_i;
     ivec2 u_uv = (uv_i + ivec2(0, -1) + res_i) % res_i;
     ivec2 d_uv = (uv_i + ivec2(0, 1) + res_i) % res_i;
     
-    // Read RGB Signal vectors
-    vec3 sL = texelFetch(tex_signal, l_uv, 0).rgb;
-    vec3 sR = texelFetch(tex_signal, r_uv, 0).rgb;
-    vec3 sU = texelFetch(tex_signal, u_uv, 0).rgb;
-    vec3 sD = texelFetch(tex_signal, d_uv, 0).rgb;
+    // Read U_signal from neighboring potential textures (already contains spectral similarity)
+    float sigL = texelFetch(tex_potential, l_uv, 0).a;
+    float sigR = texelFetch(tex_potential, r_uv, 0).a;
+    float sigU = texelFetch(tex_potential, u_uv, 0).a;
+    float sigD = texelFetch(tex_potential, d_uv, 0).a;
+    vec2 gradU_signal = vec2(sigR - sigL, sigD - sigU);
     
-    // Calculate SIMILARITY (Dot Product)
-    float simL = dot(sL, myIdentityVec);
-    float simR = dot(sR, myIdentityVec);
-    float simU = dot(sU, myIdentityVec);
-    float simD = dot(sD, myIdentityVec);
+    // === UNIFIED FLOW POTENTIAL ===
+    // U_flow = U_growth + perception * U_signal
+    // F = ∇U_flow = ∇U_growth + perception * ∇U_signal
+    float perception_weight = (g_perception - 0.5) * 2.0;  // Map [0,1] -> [-1, 1]
+    vec2 gradU = gradU_mass + perception_weight * gradU_signal;
     
-    // Gradient of Similarity: Go towards signals that smell like me (or opposite)
-    signalGrad = vec2(simR - simL, simD - simU);
+    // === COMPUTE G'(U) LOCALLY ===
+    // G(U) = 2*exp(-0.5*((U-mu)/sigma)^2) - 1
+    // G'(U) = -2 * ((U-mu)/sigma^2) * exp(-0.5*((U-mu)/sigma)^2)
+    float optimalU = 0.15 + mu_sigma.x * 0.35;
+    float tolerance = 0.03 + mu_sigma.y * 0.12;
+    float diff = (U_growth - optimalU);
+    float g_prime = -2.0 * (diff / max(tolerance * tolerance, 0.0001)) * exp(-0.5 * (diff * diff) / max(tolerance * tolerance, 0.0001));
     
-    // === FLOW LENIA VELOCITY ===
     // === DENSITY GRADIENT (Repulsion / Pressure) ===
-    // Use texelFetch for exact neighbors to avoid linear interpolation shift
     float mR = texelFetch(tex_state, r_uv, 0).r;
     float mL = texelFetch(tex_state, l_uv, 0).r;
     float mD = texelFetch(tex_state, d_uv, 0).r;
     float mU = texelFetch(tex_state, u_uv, 0).r;
     vec2 gradA = vec2(mR - mL, mD - mU);
 
-    // === EQUATION 5: Flow F = (1-alpha)*grad(U) - alpha*grad(A) ===
+    // === EQUATION 5: Flow F = (1-alpha)*grad(G(U)) - alpha*grad(A) ===
     
     // 1. Calculate Alpha (Weighting Factor)
     // alpha = [(A / theta_A)^n] clamped to [0,1]
-    
-    // Use Gene for Theta (Repulsion Limit).
-    // Original gene was 'lambda' (in affinity_lambda.y).
-    // Map lambda [0..1] to reasonable Theta range [0.1 .. 5.0]
     float g_lambda = affinity_lambda.y;
     float gene_theta = 0.1 + g_lambda * 4.9;
-    
-    // Allow Global Toggle/Override? For now, let's mix or just use the gene dynamics.
-    // Let's say the global 'theta_A' acts as a multiplier or base?
-    // User requested "Species specific genes". So we rely on gene.
-    // BUT we keep the global u_theta_A as a "Master Scalar" to tweak the whole balanced system.
-    
     float theta_A = gene_theta * p.u_theta_A;
     float alpha_n = max(p.u_alpha_n, 1.0);
-    
     float alpha_val = clamp(pow(myMass / theta_A, alpha_n), 0.0, 1.0);
     
-    // 2. Term 1: Affinity Gradient Force (Attraction)
-    // Note: Our g_prime * gradU is effectively grad(G(K*A)) = grad(Affinity)
-    // movement_scale acts as the magnitude or 'dt' for the flow field integration over time step
+    // 2. Term 1: Affinity Gradient Force (Attraction via unified potential)
     float flow_speed = 10.0 * (0.5 + g_flow);
-    vec2 force_affinity = (g_prime * gradU) * flow_speed;
+    vec2 force_affinity = (g_prime * gradU) * flow_speed;  // Uses unified gradient!
     
     // 3. Term 2: Density Gradient Force (Repulsion)
-    // We negate gradA to move AWAY from high density
     vec2 force_repulsion = -gradA * flow_speed; 
     
     // Mix based on alpha
-    // When mass is low (alpha~0), we follow affinity (form patterns)
+    // When mass is low (alpha~0), we follow affinity (form patterns + chemotaxis)
     // When mass is high (alpha~1), we follow pressure (avoid collapse)
-    vec2 flowVelocity = mix(force_affinity, force_repulsion, alpha_val);
-    
-    // Add Chemotaxis (External Signal)
-    float chemotaxis_strength = (g_perception - 0.5) * 2.0;
-    vec2 totalVelocity = flowVelocity + (signalGrad * chemotaxis_strength);
+    vec2 totalVelocity = mix(force_affinity, force_repulsion, alpha_val);
     
     // === MASS ADVECTION (Conservative) with Temperature ===
     vec2 targetUV = uv + totalVelocity * p.u_dt * px;

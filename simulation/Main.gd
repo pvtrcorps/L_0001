@@ -28,7 +28,8 @@ var ui_schema = {
 	],
 	"Chemical Signal": [
 		["signal_diff", "Diffusion Rate", 0.0, 10.0, 0.1],
-		["signal_decay", "Decay Rate", 0.0, 1.0, 0.01]
+		["signal_decay", "Decay Rate", 0.0, 1.0, 0.01],
+		["signal_advect", "Advection Weight", 0.0, 1.0, 0.01]
 	],
 	"Gene Pools (Init)": [
 		["g_mu_min", "Archetype (Mu) Min", 0.0, 1.0, 0.05],
@@ -115,6 +116,7 @@ func _build_ui():
 		"alpha_n": "Repulsion Sharpness. Controls how abruptly the repulsion force kicks in.",
 		"signal_diff": "Diffusion Rate. How fast the chemical signal spreads to neighboring cells.",
 		"signal_decay": "Decay Rate. How fast the chemical signal dissipates over time.",
+		"signal_advect": "Advection Weight. How much the chemical signal is dragged by the mass flow.",
 		
 		# Genes
 		"g_mu_min": "Archetype (Mu) Minimum. Optimal density for growth.",

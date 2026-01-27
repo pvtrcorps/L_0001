@@ -28,6 +28,7 @@ var params = {
 	# Signal Layer
 	"signal_diff": 2.0,    # Diffusion Rate
 	"signal_decay": 0.1,   # Decay Rate
+	"signal_advect": 0.2,  # Signal advection weight [0-1] (how much signals follow mass flow)
 	
 	# Gene Ranges (Min, Max) [0.0, 1.0]
 	"g_mu_min": 0.0, "g_mu_max": 1.0,
@@ -188,9 +189,9 @@ func _update_ubo():
 		params["R"],                           # float u_R
 		params["theta_A"],                     # Repurposed _pad1 (Critical Mass)
 		params["alpha_n"],                     # Repurposed _pad2 (Alpha Exponent)
-		params["temperature"],                 # float u_temperature (was _pad3)
+		params["temperature"],                 # float u_temperature
 		# Evolution
-		0.0,                                   # Padding (Removed mutation_rate)
+		params["signal_advect"],               # float u_signal_advect (was mutation_rate)
 		0.0,                                   # Padding (Removed base_decay)
 		# Initialization  
 		params["init_clusters"],               # float u_init_clusters
@@ -229,7 +230,7 @@ func _dispatch_step():
 	var key_signal = "sig_" + str(ping_pong)
 	var set_signal = set_cache.get(key_signal)
 	if not set_signal or not set_signal.is_valid():
-		set_signal = _create_set_signal(src_signal, dst_signal)
+		set_signal = _create_set_signal(src_signal, dst_signal, src_state)
 		set_cache[key_signal] = set_signal
 		
 	var compute_list_signal = rd.compute_list_begin()
@@ -516,7 +517,7 @@ func _create_set_init(dst_state: RID, dst_genome: RID) -> RID:
 	
 	return rd.uniform_set_create([u_ubo, u_state, u_genome], shader_init, 0)
 
-func _create_set_signal(src_sig: RID, dst_sig: RID) -> RID:
+func _create_set_signal(src_sig: RID, dst_sig: RID, src_state: RID) -> RID:
 	var u_ubo = RDUniform.new()
 	u_ubo.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
 	u_ubo.binding = 0
@@ -533,7 +534,13 @@ func _create_set_signal(src_sig: RID, dst_sig: RID) -> RID:
 	u_dst.binding = 2
 	u_dst.add_id(dst_sig)
 	
-	return rd.uniform_set_create([u_ubo, u_src, u_dst], shader_signal, 0)
+	var u_state = RDUniform.new()
+	u_state.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	u_state.binding = 3
+	u_state.add_id(sampler_linear)
+	u_state.add_id(src_state)
+	
+	return rd.uniform_set_create([u_ubo, u_src, u_dst, u_state], shader_signal, 0)
 
 func _create_set_conv(src_state: RID, src_genome: RID, src_sig: RID, dst_potential: RID) -> RID:
 	var u_ubo = RDUniform.new()

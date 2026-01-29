@@ -11,8 +11,8 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_theta_A; // Previously _pad1
     float u_alpha_n; // Previously _pad2
     float u_temperature; // Temperature (s)
-    float _pad4;
-    float _pad5;
+    float u_signal_advect;
+    float u_beta;
     float u_init_clusters;
     float u_init_density;
     float u_colonize_thr;
@@ -62,33 +62,46 @@ void main() {
         density = smoothstep(0.4, 0.2, d);
     }
     
-    // 2. Genome Generation (8 Base Genes + 2 Spectral Genes)
-    // Species-specific base genome per cluster
+    // 2. Genome Generation (8 Kernel/Growth Genes + 2 Spectral Genes)
+    // Species-specific genome per cluster
     vec2 species_seed = vec2(cell_x, cell_y) + p.u_seed;
     
-    float g_mu = mix(p.u_range_mu.x, p.u_range_mu.y, hash(species_seed + 1.0));
-    float g_sigma = mix(p.u_range_sigma.x, p.u_range_sigma.y, hash(species_seed + 2.0));
-    float g_radius = mix(p.u_range_radius.x, p.u_range_radius.y, hash(species_seed + 3.0));
-    float g_flow = mix(p.u_range_flow.x, p.u_range_flow.y, hash(species_seed + 4.0));
-    float g_affinity = mix(p.u_range_affinity.x, p.u_range_affinity.y, hash(species_seed + 5.0));
-    float g_lambda = mix(p.u_range_lambda.x, p.u_range_lambda.y, hash(species_seed + 6.0));
-    float g_secretion = mix(p.u_range_secretion.x, p.u_range_secretion.y, hash(species_seed + 7.0));
-    float g_perception = mix(p.u_range_perception.x, p.u_range_perception.y, hash(species_seed + 8.0));
+    // === KERNEL GENES (6) ===
+    float b1_weight = hash(species_seed + 1.0);  // Range [0, 1] - POSITIVE ONLY
+    float b2_weight = hash(species_seed + 2.0);  // Range [0, 1]
+    float b3_weight = hash(species_seed + 3.0);  // Range [0, 1]
+    float a2_pos = hash(species_seed + 4.0);         // Middle ring position [0,1]
+    float kernel_width_raw = hash(species_seed + 5.0);
+    // Map Flow (Mobility) to Kernel Width [0,1] using u_range_flow
+    float kernel_width = mix(p.u_range_flow.x, p.u_range_flow.y, kernel_width_raw);
     
-    // Spectral Genes (for chemotaxis signaling)
-    float g_emission_hue = hash(species_seed + 9.0);   // [0, 1] hue of emitted signal
-    float g_detection_hue = hash(species_seed + 10.0); // [0, 1] hue this species seeks
+    float kernel_radius_raw = hash(species_seed + 6.0); 
+    // Map Radius using u_range_radius
+    float kernel_radius = mix(p.u_range_radius.x, p.u_range_radius.y, kernel_radius_raw);
     
-    // Pack 8 base genes into RGBA32F (genome texture)
+    // === GROWTH GENES (2) ===
+    float growth_mu_raw = hash(species_seed + 7.0);
+    // Map Mu (Archetype) using u_range_mu
+    float growth_mu = mix(p.u_range_mu.x, p.u_range_mu.y, growth_mu_raw);
+    
+    float growth_sigma_raw = hash(species_seed + 8.0); 
+    // Map Sigma (Stability) using u_range_sigma
+    float growth_sigma = mix(p.u_range_sigma.x, p.u_range_sigma.y, growth_sigma_raw);
+    
+    // === SPECTRAL GENES (2) - For Chemical Signals ===
+    float emission_hue = hash(species_seed + 9.0);   // Emitted signal hue
+    float detection_hue = hash(species_seed + 10.0); // Detected signal hue
+    
+    // Pack 8 base genes into genome texture (RGBA32F)
     vec4 packedGenome = vec4(
-        pack2(g_mu, g_sigma),
-        pack2(g_radius, g_flow),
-        pack2(g_affinity, g_lambda),
-        pack2(g_secretion, g_perception)
+        pack2(b1_weight, b2_weight),        // R: inner/middle weights
+        pack2(b3_weight, a2_pos),           // G: outer weight + position
+        pack2(kernel_width, kernel_radius), // B: width + size
+        pack2(growth_mu, growth_sigma)      // A: growth params
     );
     
     // Pack spectral genes into state.a (replaces age tracking)
-    float packedSpectral = pack2(g_emission_hue, g_detection_hue);
+    float packedSpectral = pack2(emission_hue, detection_hue);
     
     imageStore(img_state, uv_i, vec4(density, 0.0, 0.0, packedSpectral));
     // Write genome everywhere in the cluster to prevent "Void Border" artifacts

@@ -12,6 +12,7 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_alpha_n; 
     float u_temperature;
     float u_signal_advect;  // NEW: Signal advection weight [0-1]
+    float u_beta;
     float _pad5;
     float u_init_clusters;
     float u_init_density;

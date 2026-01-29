@@ -11,8 +11,8 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_theta_A;
     float u_alpha_n;
     float u_temperature;
-    float _pad4;
-    float _pad5;
+    float u_signal_advect;
+    float u_beta;
     float u_init_clusters;
     float u_init_density;
     float u_colonize_thr;

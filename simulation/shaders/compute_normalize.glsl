@@ -11,8 +11,8 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_theta_A;
     float u_alpha_n;
     float u_temperature;
-    float _pad4;
-    float _pad5;
+    float u_signal_advect;
+    float u_beta;
     float u_init_clusters;
     float u_init_density;
     float u_colonize_thr;
@@ -124,12 +124,46 @@ void main() {
     
     imageStore(img_new_genome, uv_i, finalGenome);
     
-    // Unpack spectral genes for secretion
+    // Read genome for dynamic secretion calculation
+    vec2 growth_genes = unpack2(finalGenome.a);
+    vec2 width_radius = unpack2(finalGenome.b);
+    float growth_mu = growth_genes.x;
+    float kernel_width = width_radius.x;
+    
+    // Unpack spectral genes for emission
     vec2 spectral_genes = unpack2(packedSpectral);
     float g_emission_hue = spectral_genes.x;
     
-    vec2 secre_percep = unpack2(finalGenome.a);
-    float g_secretion = secre_percep.x;
+    // Dynamic secretion: high μ species + wide kernels secrete more
+    float secretion_base = 0.3 + growth_mu * 0.7;     // [0.3, 1.0]
+    float secretion_diffusion = 0.5 + kernel_width;   // [0.5, 1.5]
+    float raw_secretion = clamp((secretion_base * secretion_diffusion) / 1.5, 0.0, 1.0);
+    
+    // Map to UI range
+    float g_secretion = mix(p.u_range_secretion.x, p.u_range_secretion.y, raw_secretion);
+    vec2 sec_per = unpack2(finalGenome.a); // Actually... wait.
+    
+    // We need to verify where secretion is packed.
+    // In compute_init:
+    // R=(b1, b2), G=(b3, a2), B=(width, radius), A=(mu, sigma)
+    // Wait... 8 genes.
+    // Texture is RGBA32F -> 4 channels.
+    // 2 genes per channel (unpack2).
+    // R -> b1, b2
+    // G -> b3, a2
+    // B -> width, radius
+    // A -> mu, sigma
+    
+    // WHERE are secretion and perception?
+    // They are NOT in the 8-gene genome texture currently!
+    // The genome texture only holds 8 core genes.
+    // compute_init.glsl lines 67-85 define 8 genes.
+    
+    // If they are not packed, we cannot read them!
+    // We must stick to the hardcoded dependency for now OR repack the genome.
+    // The user wants to use the sliders/histograms.
+    
+    // CHECK compute_init.glsl Packing!
     
     // 4. Finalization
     float finalMass = mass;

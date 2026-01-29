@@ -42,7 +42,11 @@ var params = {
 	
 	# Pressure / Density Control (Eq 5)
 	"theta_A": 2.0,       # Critical Mass (Repulsion kicks in above this)
-	"alpha_n": 2.0        # Smoothness of the transition to repulsion
+	"alpha_n": 2.0,       # Smoothness of the transition to repulsion
+	
+	# Negotiation Rule (IMGEP Paper)
+	"beta_selection": 1.0  # Selection pressure for genome mixing (higher = more competitive)
+							# Range: 0.0 (no affinity) → 2.0 (strong) [5.0 was too aggressive]
 }
 
 # === RENDERING DEVICE RESOURCES ===
@@ -187,12 +191,12 @@ func _update_ubo():
 		# Kernel parameters
 		# Kernel parameters
 		params["R"],                           # float u_R
-		params["theta_A"],                     # Repurposed _pad1 (Critical Mass)
-		params["alpha_n"],                     # Repurposed _pad2 (Alpha Exponent)
-		params["temperature"],                 # float u_temperature
-		# Evolution
-		params["signal_advect"],               # float u_signal_advect (was mutation_rate)
-		0.0,                                   # Padding (Removed base_decay)
+		params["theta_A"],                     # float u_theta_A (Critical Mass)
+		params["alpha_n"],                     # float u_alpha_n (Alpha Exponent)
+		params["temperature"],                 # float u_temperature (s)
+		# Evolution / Mixing
+		params["signal_advect"],               # float u_signal_advect
+		params["beta_selection"],              # float u_beta (Negotiation selection pressure)
 		# Initialization  
 		params["init_clusters"],               # float u_init_clusters
 		params["init_density"],                # float u_init_density

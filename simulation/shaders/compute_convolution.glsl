@@ -11,8 +11,8 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_theta_A; // Previously _pad1
     float u_alpha_n; // Previously _pad2
     float u_temperature; // Temperature (s)
-    float _pad4;
-    float _pad5;
+    float u_signal_advect; // Signal advection weight
+    float u_beta; // Selection pressure for negotiation rule
     float u_init_clusters;
     float u_init_density;
     float u_colonize_thr;
@@ -46,23 +46,49 @@ float gaussian(float x, float mu, float sigma) {
     return exp(-0.5 * d * d);
 }
 
-// Species-Dependent Kernel
-float kernel(float r, float g_mu, float g_sigma, float g_radius, float g_affinity) {
-    float R = p.u_R * (0.5 + g_radius); 
-    float norm_r = r / R;
+// Mexican Hat Kernel (Negative Weights Enabled)
+// Paper Eq 1: K(x) = Σ_j b_j * exp(-0.5 * ((x/(r*R) - a_j)/w_j)²)
+float kernel(float r, vec4 genome_rg, vec4 genome_ba) {
+    // Unpack kernel genes
+    vec2 b1b2 = unpack2(genome_rg.r);
+    vec2 b3a2 = unpack2(genome_rg.g);
+    vec2 width_radius = unpack2(genome_rg.b);
+    
+    float b1_weight = b1b2.x;
+    float b2_weight = b1b2.y;
+    float b3_weight = b3a2.x;
+    float a2_pos = b3a2.y;
+    float kernel_width = width_radius.x;
+    float kernel_radius = width_radius.y;
+    
+    // Map genes to kernel parameters
+    
+    // OFFICIAL FLOW LENIA: b weights are POSITIVE ONLY [0.001, 1.0]
+    float b1 = 0.001 + b1_weight * 0.999;
+    float b2 = 0.001 + b2_weight * 0.999; 
+    float b3 = 0.001 + b3_weight * 0.999;
+    
+    float a1 = 0.15;
+    float a2 = 0.3 + a2_pos * 0.4;
+    float a3 = 0.85;
+    
+    // Widths
+    float width_scale = 0.04 + kernel_width * 0.12;
+    float w1 = width_scale;
+    float w2 = width_scale * 1.2;
+    float w3 = width_scale * 0.8;
+    
+    float r_scale = 0.5 + kernel_radius;
+    float R_actual = p.u_R * r_scale;
+    float norm_r = r / R_actual;
     if (norm_r > 1.0) return 0.0;
     
-    float r2_pos = 0.2 + g_mu * 0.45;
-    float w1 = g_affinity * 1.5;
-    float w3 = (1.0 - g_sigma) * 1.2;
-    float w2 = 1.0; 
-    float sig_base = 0.05 + g_sigma * 0.1;
+    // Gaussian bumps
+    float k1 = b1 * gaussian(norm_r, a1, w1);
+    float k2 = b2 * gaussian(norm_r, a2, w2);
+    float k3 = b3 * gaussian(norm_r, a3, w3);
     
-    float k1 = gaussian(norm_r, 0.1, 0.07) * w1;
-    float k2 = gaussian(norm_r, r2_pos, sig_base) * w2;
-    float k3 = gaussian(norm_r, 0.85, 0.09) * w3;
-    
-    return k1 + k2 + k3;
+    return k1 + k2 + k3; // Raw kernel value, will be normalized by sum in loop
 }
 
 // Convert hue [0,1] to RGB using HSV with S=1, V=1
@@ -136,7 +162,7 @@ void main() {
     int maxR = int(R_max) + 1;
     
     float sum = 0.0;
-    float totalWeight = 0.0;
+    float totalWeight = 0.0; // Restoring normalization accumulator
     vec2 weightedGradient = vec2(0.0);
     
     for (int dy = -maxR; dy <= maxR; dy++) {
@@ -144,16 +170,14 @@ void main() {
             vec2 offset = vec2(float(dx), float(dy));
             float r = length(offset);
             
-            float w = kernel(r, g_mu, g_sigma, g_radius, g_affinity);
-            if (w > 0.0) {
-                // Precise Integer Sampling to avoid sub-pixel drift
-                ivec2 neighbor_coord = (uv_i + ivec2(dx, dy) + res_i) % res_i; // True Torus Wrap
-                
-                // Use texelFetch instead of texture(linear)
+            float w = kernel(r, g_tex, g_tex);
+            if (w > 0.0001) { // Positive weights only now
+                // Precise Integer Sampling
+                ivec2 neighbor_coord = (uv_i + ivec2(dx, dy) + res_i) % res_i;
                 float neighborMass = texelFetch(tex_state, neighbor_coord, 0).r;
                 
                 sum += neighborMass * w;
-                totalWeight += w;
+                totalWeight += w; // Accumulate spatial weight
                 
                 if (r > 0.0) {
                     vec2 dir = offset / r;
@@ -163,16 +187,25 @@ void main() {
         }
     }
     
-    float U_growth = (totalWeight > 0.0) ? sum / totalWeight : 0.0;
+    // Step 1: Compute convolution K*A (NORMALIZED by spatial sum)
+    // This matches: nK = K / sum(K) in official code
+    float U_raw = (totalWeight > 0.0) ? sum / totalWeight : 0.0;
     
-    // Growth derivative approximation G'(U) for Flow Lenia
-    // G(U) = 2*exp(-0.5*((U-mu)/sigma)^2) - 1
-    // G'(U) = -2 * ((U-mu)/sigma^2) * exp(-0.5*((U-mu)/sigma)^2)
-    float optimalU = 0.15 + g_mu * 0.35; 
-    float tolerance = 0.03 + g_sigma * 0.12;
-    float diff = (U_growth - optimalU);
-    float g_prime = -2.0 * (diff / max(tolerance * tolerance, 0.0001)) * exp(-0.5 * (diff * diff) / max(tolerance * tolerance, 0.0001));
+    // Step 2: Apply Growth Function G(U)
+    // Read growth genes
+    vec2 growth_genes = unpack2(g_tex.a);
+    float growth_mu = growth_genes.x;
+    float growth_sigma = growth_genes.y;
     
+    // Restore Lenia ranges (U is normalized [0,1])
+    float mu = growth_mu; // Use direct [0,1] from initialization (mapped by UI)
+    float sigma = 0.001 + growth_sigma * 0.199; // Keep sigma scaled [0, 0.2] for stability
+    
+    float diff = (U_raw - mu);
+    float exp_term = exp(-0.5 * (diff * diff) / max(sigma * sigma, 0.0001));
+    float U_growth = 2.0 * exp_term - 1.0;  // Range: [-1, 1]
+    
+    // Normalize gradient relative to kernel strength
     vec2 gradU_growth = (totalWeight > 0.0) ? weightedGradient / totalWeight : vec2(0.0);
     
     // === OUTPUT ===

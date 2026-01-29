@@ -24,7 +24,8 @@ var ui_schema = {
 	"Flow Physics": [
 		["temperature", "Temperature (s)", 0.0, 3.0, 0.05],
 		["theta_A", "Global Density Mult", 0.1, 5.0, 0.1],
-		["alpha_n", "Repulsion Sharpness (n)", 1.0, 8.0, 0.1]
+		["alpha_n", "Repulsion Sharpness (n)", 1.0, 8.0, 0.1],
+		["beta_selection", "Selection Pressure (β)", 0.0, 3.0, 0.1]
 	],
 	"Chemical Signal": [
 		["signal_diff", "Diffusion Rate", 0.0, 10.0, 0.1],
@@ -117,6 +118,7 @@ func _build_ui():
 		"signal_diff": "Diffusion Rate. How fast the chemical signal spreads to neighboring cells.",
 		"signal_decay": "Decay Rate. How fast the chemical signal dissipates over time.",
 		"signal_advect": "Advection Weight. How much the chemical signal is dragged by the mass flow.",
+		"beta_selection": "Selection Pressure (β). Controls genome competition strength. 0.0=mass only, 1.0=balanced, 2.0=highly competitive.",
 		
 		# Genes
 		"g_mu_min": "Archetype (Mu) Minimum. Optimal density for growth.",

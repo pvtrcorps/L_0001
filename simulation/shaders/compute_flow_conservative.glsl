@@ -11,8 +11,8 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_theta_A; // Previously _pad1
     float u_alpha_n; // Previously _pad2
     float u_temperature; // Temperature (s) for box distribution
-    float _pad4; // mutation_rate
-    float _pad5; // base_decay
+    float u_signal_advect; // Signal advection weight
+    float u_beta; // Selection pressure for negotiation rule
     float u_init_clusters;
     float u_init_density;
     float u_colonize_thr;
@@ -111,19 +111,65 @@ void main() {
     float myMass = state.r;
     float age = state.a;
     
-    // Genome Unpacking (8 Genes)
+    // Genome Unpacking (New 8-Gene System)
     vec4 myGenome = texture(tex_genome, uv);
-    vec2 mu_sigma = unpack2(myGenome.r);
-    vec2 radius_flow = unpack2(myGenome.g);
-    float g_flow = radius_flow.y;
-    vec2 affinity_lambda = unpack2(myGenome.b);
-    float myAffinity = affinity_lambda.x;
-    vec2 secre_percep = unpack2(myGenome.a);
-    float g_perception = secre_percep.y;
+    // R: (b1_weight, b2_weight)
+    // G: (b3_weight, a2_pos)
+    // B: (kernel_width, kernel_radius)
+    // A: (growth_mu, growth_sigma)
+    vec2 growth_genes = unpack2(myGenome.a);
+    vec2 width_radius = unpack2(myGenome.b);
+    vec2 b3a2 = unpack2(myGenome.g);
+    
+    float growth_mu = growth_genes.x;
+    float growth_sigma = growth_genes.y;
+    float kernel_width = width_radius.x;
+    float kernel_radius = width_radius.y;
+    float a2_pos = b3a2.y;
+    
+    // Spectral genes for perception
+    vec2 spectral_genes = unpack2(state.a);
+    float detection_hue = spectral_genes.y;
+    
+    // Perception strength from gene (derived from stability)
+    // Low sigma (unstable/picky) -> High perception needed
+    float raw_perception = clamp(1.0 - growth_sigma, 0.0, 1.0);
+    
+    // Map to UI range
+    float perception_strength = mix(p.u_range_perception.x, p.u_range_perception.y, raw_perception);
+    // === 1. Calculate Gradient of Affinity U (using Sobel) ===
+    // We compute gradient of U (Growth) NOT density. 
+    // This allows flow away from center when density > mu due to G(u) shape.
+    
+    vec2 pixel_size = 1.0 / p.u_res;
+    
+    // Sobel Kernels (transposed relative to typical CPU definition to match GLSL axes)
+    // dU/dx
+    float gx = 0.0;
+    gx += -1.0 * texture(tex_potential, uv + vec2(-1, -1)*pixel_size).r;
+    gx += -2.0 * texture(tex_potential, uv + vec2(-1,  0)*pixel_size).r;
+    gx += -1.0 * texture(tex_potential, uv + vec2(-1,  1)*pixel_size).r;
+    gx +=  1.0 * texture(tex_potential, uv + vec2( 1, -1)*pixel_size).r;
+    gx +=  2.0 * texture(tex_potential, uv + vec2( 1,  0)*pixel_size).r;
+    gx +=  1.0 * texture(tex_potential, uv + vec2( 1,  1)*pixel_size).r;
+    
+    // dU/dy
+    float gy = 0.0;
+    gy += -1.0 * texture(tex_potential, uv + vec2(-1, -1)*pixel_size).r;
+    gy += -2.0 * texture(tex_potential, uv + vec2( 0, -1)*pixel_size).r;
+    gy += -1.0 * texture(tex_potential, uv + vec2( 1, -1)*pixel_size).r;
+    gy +=  1.0 * texture(tex_potential, uv + vec2(-1,  1)*pixel_size).r;
+    gy +=  2.0 * texture(tex_potential, uv + vec2( 0,  1)*pixel_size).r;
+    gy +=  1.0 * texture(tex_potential, uv + vec2( 1,  1)*pixel_size).r;
+    
+    vec2 gradU_mass = vec2(gx, gy); // Magnitude is usually higher with Sobel, check scale
+    
+    // For Signal Gradient, we can still use the passed value or apply Sobel if needed.
+    // Keeping existing signal logic for now but applying Sobel to Mass Affinity is CRITICAL.
     
     vec4 potential = texture(tex_potential, uv);
     float U_growth = potential.r;     // Mass convolution result
-    vec2 gradU_mass = potential.gb;   // Gradient of mass potential
+    // vec2 gradU_mass = potential.gb;   // Gradient of mass potential (now computed via Sobel)
     float U_signal = potential.a;     // Spectral similarity at this pixel
     
     // === SPECTRAL SIGNAL GRADIENT ===
@@ -143,17 +189,7 @@ void main() {
     
     // === UNIFIED FLOW POTENTIAL ===
     // U_flow = U_growth + perception * U_signal
-    // F = ∇U_flow = ∇U_growth + perception * ∇U_signal
-    float perception_weight = (g_perception - 0.5) * 2.0;  // Map [0,1] -> [-1, 1]
-    vec2 gradU = gradU_mass + perception_weight * gradU_signal;
-    
-    // === COMPUTE G'(U) LOCALLY ===
-    // G(U) = 2*exp(-0.5*((U-mu)/sigma)^2) - 1
-    // G'(U) = -2 * ((U-mu)/sigma^2) * exp(-0.5*((U-mu)/sigma)^2)
-    float optimalU = 0.15 + mu_sigma.x * 0.35;
-    float tolerance = 0.03 + mu_sigma.y * 0.12;
-    float diff = (U_growth - optimalU);
-    float g_prime = -2.0 * (diff / max(tolerance * tolerance, 0.0001)) * exp(-0.5 * (diff * diff) / max(tolerance * tolerance, 0.0001));
+    vec2 gradU = gradU_mass + perception_strength * gradU_signal;
     
     // === DENSITY GRADIENT (Repulsion / Pressure) ===
     float mR = texelFetch(tex_state, r_uv, 0).r;
@@ -164,25 +200,30 @@ void main() {
 
     // === EQUATION 5: Flow F = (1-alpha)*grad(G(U)) - alpha*grad(A) ===
     
-    // 1. Calculate Alpha (Weighting Factor)
     // alpha = [(A / theta_A)^n] clamped to [0,1]
-    float g_lambda = affinity_lambda.y;
-    float gene_theta = 0.1 + g_lambda * 4.9;
-    float theta_A = gene_theta * p.u_theta_A;
-    float alpha_n = max(p.u_alpha_n, 1.0);
-    float alpha_val = clamp(pow(myMass / theta_A, alpha_n), 0.0, 1.0);
+    // 3. Alpha Calculation
+    // Use UI parameter for theta_A (Critical Mass)
+    float theta_A = p.u_theta_A;
+    // Use UI parameter for alpha_n (Sharpness) 
+    float alpha_n = p.u_alpha_n;
+    float alpha_val = clamp(pow(myMass / max(theta_A, 0.001), alpha_n), 0.0, 1.0);
     
-    // 2. Term 1: Affinity Gradient Force (Attraction via unified potential)
-    float flow_speed = 10.0 * (0.5 + g_flow);
-    vec2 force_affinity = (g_prime * gradU) * flow_speed;  // Uses unified gradient!
+    // Official Flow Formula: nU * (1-alpha) - nA * alpha
+    // Equivalent to: mix(gradU, -gradA, alpha)
+    // Official code does NOT use a flow_speed multiplier (implies 1.0)
+    // But we check kernel_width to give some variety
     
-    // 3. Term 2: Density Gradient Force (Repulsion)
-    vec2 force_repulsion = -gradA * flow_speed; 
+    float base_flow_speed = 1.0;
+    vec2 force_affinity = gradU * base_flow_speed;
+    vec2 force_repulsion = -gradA * base_flow_speed;
     
-    // Mix based on alpha
-    // When mass is low (alpha~0), we follow affinity (form patterns + chemotaxis)
-    // When mass is high (alpha~1), we follow pressure (avoid collapse)
     vec2 totalVelocity = mix(force_affinity, force_repulsion, alpha_val);
+    
+    // Velocity Clipping (Critical for stability)
+    // Official: clip to [-(dd-sigma), +(dd-sigma)]
+    // dd=5, sigma=0.65 -> +/- 4.35
+    float max_vel = 4.0; 
+    totalVelocity = clamp(totalVelocity, -max_vel, max_vel);
     
     // === MASS ADVECTION (Conservative) with Temperature ===
     vec2 targetUV = uv + totalVelocity * p.u_dt * px;
@@ -239,49 +280,82 @@ void main() {
         }
     }
     
-    // === DISCRETE GENOME ADVECTION (High-Precision ArgMax) ===
-    // "Softmax Sampling" limit (Temperature -> 0): The source with the highest mass contribution 
-    // determines the new identity. We use atomicMax to find the winner.
+    // === GENOME ADVECTION with BOX DISTRIBUTION & NEGOTIATION RULE ===
+    // Paper-compliant: Use SAME box distribution as mass (Equations 6-7, ISAL 2023)
+    // Negotiation Rule: Priority based on mass × exp(β × V(x_src)) (IMGEP 2025)
     if (survivingMass > 0.0) {
-        // Fix for Genome Bias:
-        // 'targetPx' is a CENTER coordinate (e.g. 10.5 is center of pixel 10).
-        // The splatting logic below assumes CORNER coordinates (e.g. 10.0 is center of pixel 10).
-        // We must subtract 0.5 so that 10.5 becomes 10.0, producing fract=0, writing purely to pixel 10.
-        // Without this, 10.5 gives fract=0.5, distributing genome to 10,11,10,11 (Down-Right bias).
-        vec2 targetPx_ID = targetPx - 0.5;
+        // Use SAME box distribution parameters as mass transport
+        // This ensures genome spreads to ~4-9 pixels (not just 4)
+        vec2 cloudMax = targetPx + vec2(s);
+        vec2 cloudMin = targetPx - vec2(s);
         
-        ivec2 tl = ivec2(floor(targetPx_ID));
-        vec2 f = fract(targetPx_ID);
+        ivec2 iMin = ivec2(floor(cloudMin));
+        ivec2 iMax = ivec2(ceil(cloudMax));
         ivec2 res = ivec2(p.u_res);
+        float totalArea = (2.0 * s) * (2.0 * s);
         
-        // Anti-Bias: Hash the index to prevent "Bottom-Right" preference in ties.
-        // We use a XOR mask derived from the random seed to shuffle the index preference every frame.
-        // This ensures that "who wins the tie" is spatially and temporally random (white noise), 
-        // eliminating global diagonal drift.
+        // Compute negotiation priority using affinity map
+        // V(x_src) = U_growth (already computed in convolution pass)
+        // β = selection pressure parameter (higher = more competitive)
         
+        // Normalize U_growth to typical range [0, 1] before exponential
+        // Typical U_growth range: [0.0, 0.5] → normalize to [0, 1]
+        float normalized_U = clamp((U_growth - 0.1) / 0.3, 0.0, 1.0);
+        
+        // Centered exponential: exp(β × (U - 0.5))
+        // At U=0.5 (neutral): affinity_factor = 1.0
+        // At U=0.0 (poor): affinity_factor = exp(-β/2)
+        // At U=1.0 (excellent): affinity_factor = exp(β/2)
+        float affinity_exponent = p.u_beta * (normalized_U - 0.5);
+        float affinity_factor = exp(affinity_exponent);
+        
+        // Cap maximum advantage to prevent single-species dominance
+        // With beta=1.0: max factor ≈ 1.65x (reasonable)
+        // With beta=2.0: max factor ≈ 2.72x (competitive)
+        affinity_factor = min(affinity_factor, 5.0);
+        
+        // Anti-Bias: Hash the source index to prevent spatial preference
         uint raw_idx = uint(uv_i.y * res.x + uv_i.x);
-        
-        // Create a mask from the seed (which changes every frame)
-        // Use robust hash of the float bits to ensure the mask changes drastically and covers high bits.
-        // floatBitsToUint preserves entropy of the seed update.
         uint seed_bits = floatBitsToUint(p.u_seed);
-        uint frame_mask = pcg_hash_1d(seed_bits) & 0xFFFFFFu; 
-        
-        // Scramble the index for the comparison key
+        uint frame_mask = pcg_hash_1d(seed_bits) & 0xFFFFFFu;
         uint scrambled_idx = raw_idx ^ frame_mask;
         
-        // 1. Add random jitter to mass for priority
-        float jitter = hash(uv + vec2(p.u_dt, p.u_seed)) * 0.9; 
-        uint p_mass = uint(clamp(survivingMass * 4000.0, 0.0, 4000.0));
-        uint final_priority = uint(clamp(survivingMass * 4000.0 + jitter * 10.0, 0.0, 4095.0));
-
-        // Packed Layout: [Priority Mass (12b)] [Scrambled Index (20b)]
-        uint packed = (final_priority << 20) | (scrambled_idx & 0xFFFFFFu);
-
-        if ((1.0-f.x)*(1.0-f.y) > 0.0) imageAtomicMax(img_winner_tracker, (tl + res) % res, packed);
-        if (f.x*(1.0-f.y) > 0.0)       imageAtomicMax(img_winner_tracker, (ivec2(tl.x+1, tl.y) + res) % res, packed);
-        if ((1.0-f.x)*f.y > 0.0)       imageAtomicMax(img_winner_tracker, (ivec2(tl.x, tl.y+1) + res) % res, packed);
-        if (f.x*f.y > 0.0)             imageAtomicMax(img_winner_tracker, (ivec2(tl.x+1, tl.y+1) + res) % res, packed);
+        // Iterate over all pixels in the box distribution
+        for (int y = iMin.y; y < iMax.y; y++) {
+            float y_min = float(y);
+            float y_max = float(y + 1);
+            float h = intersect_len(y_min, y_max, cloudMin.y, cloudMax.y);
+            if (h <= 0.0) continue;
+            
+            for (int x = iMin.x; x < iMax.x; x++) {
+                float x_min = float(x);
+                float x_max = float(x + 1);
+                float w = intersect_len(x_min, x_max, cloudMin.x, cloudMax.x);
+                
+                if (w > 0.0) {
+                    float area = w * h;
+                    float weight = area / totalArea;
+                    
+                    // Negotiation Rule Priority:
+                    // P ∝ mass × I(src,dest) × exp(β × V(src))
+                    float mass_contribution = survivingMass * weight;
+                    float negotiation_priority = mass_contribution * affinity_factor;
+                    
+                    // Add small jitter to break ties
+                    float jitter = hash(uv + vec2(float(x) * 0.1, float(y) * 0.1)) * 0.01;
+                    negotiation_priority += jitter;
+                    
+                    // Pack into atomic-friendly format
+                    // [Priority (12b)] [Scrambled Index (20b)]
+                    uint priority_bits = uint(clamp(negotiation_priority * 1000.0, 0.0, 4095.0));
+                    uint packed = (priority_bits << 20) | (scrambled_idx & 0xFFFFFu);
+                    
+                    // Compete for winner position in destination pixel
+                    ivec2 p_neighbor = (ivec2(x, y) % res + res) % res;
+                    imageAtomicMax(img_winner_tracker, p_neighbor, packed);
+                }
+            }
+        }
     }
     
     // Write State (Advected Mass is accumulated in img_mass_accum via atomicAdd above)

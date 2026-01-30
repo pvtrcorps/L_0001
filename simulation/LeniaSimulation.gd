@@ -24,29 +24,41 @@ var params = {
 	"temperature": 0.65,   # Advection diffusion (s). Paper default: 0.65
 	"identity_thr": 0.2,   # Difference to be considered enemy (used in localized kernel if implemented)
 	"colonize_thr": 0.15,  # Mass needed to resist invasion
+	"theta_A": 1.0,        # Global Density Multiplier
+	"alpha_n": 3.0,        # Repulsion Sharpness
 	
 	# Signal Layer
 	"signal_diff": 2.0,    # Diffusion Rate
 	"signal_decay": 0.1,   # Decay Rate
 	"signal_advect": 0.2,  # Signal advection weight [0-1] (how much signals follow mass flow)
+	"flow_speed": 5.0,     # Multiplier for advection force (decopuled from dt)
 	
-	# Gene Ranges (Min, Max) [0.0, 1.0]
-	"g_mu_min": 0.0, "g_mu_max": 1.0,
-	"g_sigma_min": 0.0, "g_sigma_max": 1.0, 
-	"g_radius_min": 0.0, "g_radius_max": 1.0,
-	"g_flow_min": 0.0, "g_flow_max": 1.0,
-	"g_affinity_min": 0.0, "g_affinity_max": 1.0,
-	"g_lambda_min": 0.0, "g_lambda_max": 1.0,
-	"g_secretion_min": 0.0, "g_secretion_max": 1.0,
-	"g_perception_min": 0.0, "g_perception_max": 1.0,
+	"beta_selection": 1.0, # Selection pressure for negotiation rule
 	
-	# Pressure / Density Control (Eq 5)
-	"theta_A": 2.0,       # Critical Mass (Repulsion kicks in above this)
-	"alpha_n": 2.0,       # Smoothness of the transition to repulsion
+	# === GENE RANGES (16 GENES x 2 MIN/MAX) ===
+	# BLOCK A: Physiology (Body)
+	"g_mu_min": 0.12, "g_mu_max": 0.18,      # 1. Growth Target Density
+	"g_sigma_min": 0.02, "g_sigma_max": 0.06,# 2. Growth Stability
+	"g_radius_min": 0.5, "g_radius_max": 1.0,# 3. Size (Scale)
+	"g_viscosity_min": 0.0, "g_viscosity_max": 1.0, # 4. Viscosity (Mass/Inertia)
 	
-	# Negotiation Rule (IMGEP Paper)
-	"beta_selection": 1.0  # Selection pressure for genome mixing (higher = more competitive)
-							# Range: 0.0 (no affinity) → 2.0 (strong) [5.0 was too aggressive]
+	# BLOCK B: Morphology (Shape)
+	"g_shape_a_min": 0.0, "g_shape_a_max": 1.0, # 5. Ring Balance
+	"g_shape_b_min": 0.0, "g_shape_b_max": 1.0, # 6. Complexity
+	"g_shape_c_min": 0.0, "g_shape_c_max": 1.0, # 7. Ring Spacing
+	"g_growth_rate_min": 0.0, "g_growth_rate_max": 1.0, # 8. Vitality
+	
+	# BLOCK C: Social & Motor (Mind)
+	"g_affinity_min": 0.0, "g_affinity_max": 1.0, # 9. Cohesion
+	"g_repulsion_min": 0.0, "g_repulsion_max": 1.0, # 10. Spacing
+	"g_density_tol_min": 0.0, "g_density_tol_max": 1.0, # 11. Overcrowding Tol
+	"g_mobility_min": 0.0, "g_mobility_max": 1.0, # 12. Speed Base
+	
+	# BLOCK D: Communication (Senses)
+	"g_secretion_min": 0.0, "g_secretion_max": 1.0, # 13. Voice Vol
+	"g_sensitivity_min": 0.0, "g_sensitivity_max": 1.0, # 14. Hearing
+	"g_emission_hue_min": 0.0, "g_emission_hue_max": 1.0, # 15. Voice Pitch
+	"g_detection_hue_min": 0.0, "g_detection_hue_max": 1.0 # 16. Hearing Pitch
 }
 
 # === RENDERING DEVICE RESOURCES ===
@@ -73,6 +85,8 @@ var tex_state_a: RID
 var tex_state_b: RID
 var tex_genome_a: RID
 var tex_genome_b: RID
+var tex_genome_ext_a: RID # [NEW] Ext Texture (Genes 9-16)
+var tex_genome_ext_b: RID # [NEW]
 var tex_potential: RID
 var tex_mass_accum: RID
 var tex_winner_tracker: RID # [NEW]
@@ -82,6 +96,7 @@ var tex_signal_b: RID # [NEW]
 # Bridges for display
 var texture_rd_state: Texture2DRD
 var texture_rd_genome: Texture2DRD
+var texture_rd_genome_ext: Texture2DRD # [NEW]
 var texture_rd_signal: Texture2DRD # [NEW]
 
 var ubo: RID
@@ -145,12 +160,18 @@ func _process(_delta):
 		# Run Stats Pass ONLY when needed
 		_dispatch_stats()
 		var bytes = rd.buffer_get_data(stats_buffer)
-		if bytes.size() >= 328:
-			var data = bytes.to_int32_array()
-			var total_mass = float(data[0]) / 1000.0
-			var population = data[1]
+		if bytes.size() >= 648: # Updated size check
+			var ints = bytes.to_int32_array()
+			var total_mass = float(ints[0]) / 1000.0
+			var population = ints[1]
+			
+			# Parse histograms (16 genes * 10 bins)
 			var histograms = []
-			for i in range(2, 82): histograms.append(data[i])
+			for g in range(16):
+				var bins = []
+				for b in range(10):
+					bins.append(ints[2 + g * 10 + b])
+				histograms.append(bins)
 			emit_signal("stats_updated", total_mass, population, histograms)
 	
 	analysis_frame_count += 1
@@ -159,7 +180,7 @@ func _process(_delta):
 		# Run Analysis Pass ONLY when needed
 		_dispatch_analysis()
 		var bytes = rd.buffer_get_data(analysis_buffer)
-		if bytes.size() >= 163840:
+		if bytes.size() >= 294912:
 			last_analysis_bytes = bytes
 			var species_list = tracker.find_species(bytes)
 			last_species_list = species_list
@@ -180,52 +201,59 @@ func _process(_delta):
 		if texture_rd_signal.texture_rd_rid != current_signal:
 			texture_rd_signal.texture_rd_rid = current_signal
 			
+		var current_genome_ext = tex_genome_ext_b if ping_pong else tex_genome_ext_a
+		if texture_rd_genome_ext.texture_rd_rid != current_genome_ext:
+			texture_rd_genome_ext.texture_rd_rid = current_genome_ext
+			
 		display_material.set_shader_parameter("camera_pos", camera_pos)
 		display_material.set_shader_parameter("camera_zoom", camera_zoom)
+		display_material.set_shader_parameter("tex_genome_ext", texture_rd_genome_ext)
 
 func _update_ubo():
-	# UBO layout: 32 floats (128 bytes)
+	# UBO layout: Must be carefully aligned to vec4 (16 bytes)
+	# Total Floats: ~20 globals + 32 gene ranges = 52+
 	var buffer = PackedFloat32Array([
-		params["res_x"], params["res_y"],      # vec2 u_res
-		params["dt"], params["seed"],          # float u_dt, u_seed
-		# Kernel parameters
-		# Kernel parameters
-		params["R"],                           # float u_R
-		params["theta_A"],                     # float u_theta_A (Critical Mass)
-		params["alpha_n"],                     # float u_alpha_n (Alpha Exponent)
-		params["temperature"],                 # float u_temperature (s)
-		# Evolution / Mixing
-		params["signal_advect"],               # float u_signal_advect
-		params["beta_selection"],              # float u_beta (Negotiation selection pressure)
-		# Initialization  
-		params["init_clusters"],               # float u_init_clusters
-		params["init_density"],                # float u_init_density
-		params["colonize_thr"],                # Threshold for colony resistance
-		0.0,                                   # Padding
-		# Gene Ranges (12 floats)
-		params["g_mu_min"], params["g_mu_max"],
-		params["g_sigma_min"], params["g_sigma_max"],
-		params["g_radius_min"], params["g_radius_max"],
-		params["g_flow_min"], params["g_flow_max"],
-		params["g_affinity_min"], params["g_affinity_max"],
-		params["g_lambda_min"], params["g_lambda_max"],
-		# Signal Params & More Ranges (4 floats)
-		params["signal_diff"], params["signal_decay"],
-		params["g_secretion_min"], params["g_secretion_max"],
-		params["g_perception_min"], params["g_perception_max"],
-		0.0, 0.0                               # Padding to 32 floats
+		# 0. Global Params (Vec4 aligned chunks)
+		params["res_x"], params["res_y"], params["dt"], params["seed"],
+		
+		# 1. Physics Globals
+		params["R"], params["theta_A"], params["alpha_n"], params["temperature"],
+		params["signal_advect"], params["beta_selection"], params["signal_diff"], params["signal_decay"],
+		params["flow_speed"], params["init_clusters"], params["init_density"], params["colonize_thr"],
+		
+		# 2. Gene Ranges (16 Genes * 2 values = 32 floats)
+		# Block A: Physiology
+		params["g_mu_min"], params["g_mu_max"], params["g_sigma_min"], params["g_sigma_max"],
+		params["g_radius_min"], params["g_radius_max"], params["g_viscosity_min"], params["g_viscosity_max"],
+		
+		# Block B: Morphology
+		params["g_shape_a_min"], params["g_shape_a_max"], params["g_shape_b_min"], params["g_shape_b_max"],
+		params["g_shape_c_min"], params["g_shape_c_max"], params["g_growth_rate_min"], params["g_growth_rate_max"],
+		
+		# Block C: Social / Motor
+		params["g_affinity_min"], params["g_affinity_max"], params["g_repulsion_min"], params["g_repulsion_max"],
+		params["g_density_tol_min"], params["g_density_tol_max"], params["g_mobility_min"], params["g_mobility_max"],
+		
+		# Block D: Senses
+		params["g_secretion_min"], params["g_secretion_max"], params["g_sensitivity_min"], params["g_sensitivity_max"],
+		params["g_emission_hue_min"], params["g_emission_hue_max"], params["g_detection_hue_min"], params["g_detection_hue_max"]
 	])
+	
+	# Pad to multiple of 16 bytes (4 floats)
+	# Current size: 4 + 12 + 32 = 48 floats. Perfectly aligned!
+	
 	var bytes = buffer.to_byte_array()
 	rd.buffer_update(ubo, 0, bytes.size(), bytes)
 
 func _dispatch_step():
-	var src_state = tex_state_b if ping_pong else tex_state_a
-	var dst_state = tex_state_a if ping_pong else tex_state_b
-	var src_genome = tex_genome_b if ping_pong else tex_genome_a
-	var dst_genome = tex_genome_a if ping_pong else tex_genome_b
-	
-	var src_signal = tex_signal_b if ping_pong else tex_signal_a
-	var dst_signal = tex_signal_a if ping_pong else tex_signal_b
+	var src_state = tex_state_a if not ping_pong else tex_state_b
+	var dst_state = tex_state_b if not ping_pong else tex_state_a
+	var src_genome = tex_genome_a if not ping_pong else tex_genome_b
+	var dst_genome = tex_genome_b if not ping_pong else tex_genome_a
+	var src_genome_ext = tex_genome_ext_a if not ping_pong else tex_genome_ext_b
+	var dst_genome_ext = tex_genome_ext_b if not ping_pong else tex_genome_ext_a
+	var src_signal = tex_signal_a if not ping_pong else tex_signal_b
+	var dst_signal = tex_signal_b if not ping_pong else tex_signal_a
 	
 	var wg_x = int(ceil(params["res_x"] / 8.0))
 	var wg_y = int(ceil(params["res_y"] / 8.0))
@@ -249,7 +277,7 @@ func _dispatch_step():
 	var key_conv = "conv_" + str(ping_pong)
 	var set_conv = set_cache.get(key_conv)
 	if not set_conv or not set_conv.is_valid():
-		set_conv = _create_set_conv(src_state, src_genome, dst_signal, tex_potential)
+		set_conv = _create_set_conv(src_state, src_genome, dst_signal, src_genome_ext, tex_potential)
 		set_cache[key_conv] = set_conv
 		
 	var compute_list = rd.compute_list_begin()
@@ -262,7 +290,8 @@ func _dispatch_step():
 	var cache_key_flow = "flow_" + str(ping_pong)
 	var set_flow_con = set_cache.get(cache_key_flow)
 	if not set_flow_con or not set_flow_con.is_valid():
-		set_flow_con = _create_set_flow_conservative(src_state, src_genome, dst_signal, tex_potential, dst_state, dst_genome)
+		# Signature: src_state, src_genome, src_genome_ext, src_potential, src_sig, dst_mass, dst_state, dst_genome, dst_winner
+		set_flow_con = _create_set_flow_conservative(src_state, src_genome, src_genome_ext, tex_potential, dst_signal, tex_mass_accum, dst_state, dst_genome, tex_winner_tracker)
 		set_cache[cache_key_flow] = set_flow_con
 	
 	var compute_list_flow = rd.compute_list_begin()
@@ -277,7 +306,8 @@ func _dispatch_step():
 	var key_norm = "norm_" + str(ping_pong)
 	var set_norm = set_cache.get(key_norm)
 	if not set_norm or not set_norm.is_valid():
-		set_norm = _create_set_normalize(tex_potential, src_state, src_genome, dst_state, dst_signal, dst_genome)
+		# Signature: src_mass, src_pot, old_state, dst_state, dst_sig, src_winner, dst_genome, old_genome, src_genome_ext, dst_genome_ext
+		set_norm = _create_set_normalize(tex_mass_accum, tex_potential, src_state, dst_state, dst_signal, tex_winner_tracker, dst_genome, src_genome, src_genome_ext, dst_genome_ext)
 		set_cache[key_norm] = set_norm
 	
 	var compute_list_norm = rd.compute_list_begin()
@@ -291,19 +321,20 @@ func _dispatch_step():
 func _dispatch_stats():
 	var dst_state = tex_state_b if ping_pong else tex_state_a
 	var dst_genome = tex_genome_b if ping_pong else tex_genome_a
+	var dst_genome_ext = tex_genome_ext_b if ping_pong else tex_genome_ext_a
 	var wg_x = int(ceil(params["res_x"] / 8.0))
 	var wg_y = int(ceil(params["res_y"] / 8.0))
 	
 	var key_stats = "stats_" + str(ping_pong)
 	var set_stats = set_cache.get(key_stats)
 	if not set_stats or not set_stats.is_valid():
-		set_stats = _create_set_stats(dst_state, dst_genome)
+		set_stats = _create_set_stats(dst_state, dst_genome, dst_genome_ext)
 		set_cache[key_stats] = set_stats
 		
-	# Clear stats buffer (82 uints = 328 bytes)
+	# Clear stats buffer (162 uints = 648 bytes)
 	var clear_bytes = PackedByteArray()
-	clear_bytes.resize(328)
-	rd.buffer_update(stats_buffer, 0, 328, clear_bytes)
+	clear_bytes.resize(648)
+	rd.buffer_update(stats_buffer, 0, 648, clear_bytes)
 	
 	var compute_list_stats = rd.compute_list_begin()
 	rd.compute_list_bind_compute_pipeline(compute_list_stats, pipeline_stats)
@@ -314,11 +345,12 @@ func _dispatch_stats():
 func _dispatch_analysis():
 	var dst_state = tex_state_b if ping_pong else tex_state_a
 	var dst_genome = tex_genome_b if ping_pong else tex_genome_a
+	var dst_genome_ext = tex_genome_ext_b if ping_pong else tex_genome_ext_a
 	
 	var key_analysis = "analysis_" + str(ping_pong)
 	var set_analysis = set_cache.get(key_analysis)
 	if not set_analysis or not set_analysis.is_valid():
-		set_analysis = _create_set_analysis(dst_state, dst_genome)
+		set_analysis = _create_set_analysis(dst_state, dst_genome, dst_genome_ext)
 		set_cache[key_analysis] = set_analysis
 	
 	var compute_list_analysis = rd.compute_list_begin()
@@ -328,20 +360,28 @@ func _dispatch_analysis():
 	rd.compute_list_end()
 
 func _dispatch_init():
-	var set_init = _create_set_init(tex_state_a, tex_genome_a)
-	var wg_x = int(ceil(params["res_x"] / 8.0))
-	var wg_y = int(ceil(params["res_y"] / 8.0))
+	var x_groups = int(ceil(params["res_x"] / 8.0))
+	var y_groups = int(ceil(params["res_y"] / 8.0))
 	
 	var compute_list = rd.compute_list_begin()
-	rd.compute_list_bind_compute_pipeline(compute_list, pipeline_init)
-	rd.compute_list_bind_uniform_set(compute_list, set_init, 0)
-	rd.compute_list_dispatch(compute_list, wg_x, wg_y, 1)
-	rd.compute_list_end()
 	
-	# Also clear buffers
-	rd.texture_clear(tex_state_b, Color(0,0,0,0), 0, 1, 0, 1)
-	rd.texture_clear(tex_genome_b, Color(0,0,0,0), 0, 1, 0, 1)
-	rd.texture_clear(tex_signal_a, Color(0,0,0,0), 0, 1, 0, 1)
+	# 3. Create set
+	var uniform_set = _create_set_init(tex_state_a, tex_genome_a, tex_genome_ext_a)
+	
+	# 4. Dispatch
+	rd.compute_list_bind_compute_pipeline(compute_list, pipeline_init)
+	rd.compute_list_bind_uniform_set(compute_list, uniform_set, 0)
+	rd.compute_list_dispatch(compute_list, x_groups, y_groups, 1)
+	rd.compute_list_end()
+	# rd.submit()
+	# rd.sync()
+	
+	# After init, copy to B to be safe
+	# (Alternatively just rely on first step logic)
+	# Copy State A -> B
+	rd.texture_copy(tex_state_a, tex_state_b, Vector3(0,0,0), Vector3(0,0,0), Vector3(params["res_x"], params["res_y"], 1), 0, 0, 0, 0)
+	rd.texture_copy(tex_genome_a, tex_genome_b, Vector3(0,0,0), Vector3(0,0,0), Vector3(params["res_x"], params["res_y"], 1), 0, 0, 0, 0)
+	rd.texture_copy(tex_genome_ext_a, tex_genome_ext_b, Vector3(0,0,0), Vector3(0,0,0), Vector3(params["res_x"], params["res_y"], 1), 0, 0, 0, 0)
 	rd.texture_clear(tex_signal_b, Color(0,0,0,0), 0, 1, 0, 1)
 	rd.texture_clear(tex_winner_tracker, Color(0,0,0,0), 0, 1, 0, 1)
 	
@@ -349,21 +389,21 @@ func _dispatch_init():
 	ping_pong = false
 
 func _create_uniforms():
-	# UBO: 34 floats = 136 bytes (aligned to 8 bytes for vec2s)
+	# UBO: 48 floats * 4 bytes = 192 bytes
 	var buffer = PackedFloat32Array()
-	buffer.resize(34)
+	buffer.resize(48)
 	var bytes = buffer.to_byte_array()
 	ubo = rd.storage_buffer_create(bytes.size(), bytes)
 	
-	# Stats Buffer: 82 uints = 328 bytes
+	# Stats Buffer: 162 uints = 648 bytes
 	var stats_bytes = PackedByteArray()
-	stats_bytes.resize(328)
-	stats_buffer = rd.storage_buffer_create(328, stats_bytes)
+	stats_bytes.resize(648)
+	stats_buffer = rd.storage_buffer_create(648, stats_bytes)
 	
-	# Analysis Buffer: 4096 cells * 10 floats (40 bytes) = 163840 bytes
+	# Analysis Buffer: 4096 cells * 18 floats * 4 bytes = 294912 bytes
 	var analysis_bytes = PackedByteArray()
-	analysis_bytes.resize(163840)
-	analysis_buffer = rd.storage_buffer_create(163840, analysis_bytes)
+	analysis_bytes.resize(294912)
+	analysis_buffer = rd.storage_buffer_create(294912, analysis_bytes)
 
 func _create_sampler():
 	var sampler_state_linear = RDSamplerState.new()
@@ -397,6 +437,8 @@ func _create_textures():
 	tex_state_b = rd.texture_create(fmt, RDTextureView.new())
 	tex_genome_a = rd.texture_create(fmt, RDTextureView.new())
 	tex_genome_b = rd.texture_create(fmt, RDTextureView.new())
+	tex_genome_ext_a = rd.texture_create(fmt, RDTextureView.new())
+	tex_genome_ext_b = rd.texture_create(fmt, RDTextureView.new())
 	tex_potential = rd.texture_create(fmt, RDTextureView.new())
 	
 	# Signal Textures (RGBA32F for compatibility)
@@ -431,9 +473,11 @@ func _create_textures():
 	# Create Texture2DRD bridges for display
 	texture_rd_state = Texture2DRD.new()
 	texture_rd_genome = Texture2DRD.new()
+	texture_rd_genome_ext = Texture2DRD.new()
 	texture_rd_signal = Texture2DRD.new()
 	texture_rd_state.texture_rd_rid = tex_state_a
 	texture_rd_genome.texture_rd_rid = tex_genome_a
+	texture_rd_genome_ext.texture_rd_rid = tex_genome_ext_a
 	texture_rd_signal.texture_rd_rid = tex_signal_a
 	
 	if display_material:
@@ -503,7 +547,7 @@ func _load_shader(path: String) -> RID:
 
 # === UNIFORM SET CREATION HELPERS ===
 
-func _create_set_init(dst_state: RID, dst_genome: RID) -> RID:
+func _create_set_init(dst_state: RID, dst_genome: RID, dst_genome_ext: RID) -> RID:
 	var u_ubo = RDUniform.new()
 	u_ubo.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
 	u_ubo.binding = 0
@@ -519,7 +563,12 @@ func _create_set_init(dst_state: RID, dst_genome: RID) -> RID:
 	u_genome.binding = 2
 	u_genome.add_id(dst_genome)
 	
-	return rd.uniform_set_create([u_ubo, u_state, u_genome], shader_init, 0)
+	var u_genome_ext = RDUniform.new()
+	u_genome_ext.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	u_genome_ext.binding = 3
+	u_genome_ext.add_id(dst_genome_ext)
+	
+	return rd.uniform_set_create([u_ubo, u_state, u_genome, u_genome_ext], shader_init, 0)
 
 func _create_set_signal(src_sig: RID, dst_sig: RID, src_state: RID) -> RID:
 	var u_ubo = RDUniform.new()
@@ -546,7 +595,7 @@ func _create_set_signal(src_sig: RID, dst_sig: RID, src_state: RID) -> RID:
 	
 	return rd.uniform_set_create([u_ubo, u_src, u_dst, u_state], shader_signal, 0)
 
-func _create_set_conv(src_state: RID, src_genome: RID, src_sig: RID, dst_potential: RID) -> RID:
+func _create_set_conv(src_state: RID, src_genome: RID, src_sig: RID, src_genome_ext: RID, dst_potential: RID) -> RID:
 	var u_ubo = RDUniform.new()
 	u_ubo.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
 	u_ubo.binding = 0
@@ -575,11 +624,17 @@ func _create_set_conv(src_state: RID, src_genome: RID, src_sig: RID, dst_potenti
 	u_potential.binding = 4
 	u_potential.add_id(dst_potential)
 	
-	return rd.uniform_set_create([u_ubo, u_state, u_genome, u_sig, u_potential], shader_conv, 0)
+	var u_genome_ext = RDUniform.new()
+	u_genome_ext.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	u_genome_ext.binding = 5
+	u_genome_ext.add_id(sampler_nearest)
+	u_genome_ext.add_id(src_genome_ext)
+	
+	return rd.uniform_set_create([u_ubo, u_state, u_genome, u_sig, u_potential, u_genome_ext], shader_conv, 0)
 
 
 
-func _create_set_stats(tex_state: RID, tex_genome: RID) -> RID:
+func _create_set_stats(tex_state: RID, tex_genome: RID, tex_genome_ext: RID) -> RID:
 	var u_ubo = RDUniform.new()
 	u_ubo.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
 	u_ubo.binding = 0
@@ -602,9 +657,15 @@ func _create_set_stats(tex_state: RID, tex_genome: RID) -> RID:
 	u_stats.binding = 3
 	u_stats.add_id(stats_buffer)
 	
-	return rd.uniform_set_create([u_ubo, u_state, u_genome, u_stats], shader_stats, 0)
+	var u_genome_ext = RDUniform.new()
+	u_genome_ext.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	u_genome_ext.binding = 4
+	u_genome_ext.add_id(sampler_nearest)
+	u_genome_ext.add_id(tex_genome_ext)
+	
+	return rd.uniform_set_create([u_ubo, u_state, u_genome, u_stats, u_genome_ext], shader_stats, 0)
 
-func _create_set_analysis(tex_state: RID, tex_genome: RID) -> RID:
+func _create_set_analysis(tex_state: RID, tex_genome: RID, tex_genome_ext: RID) -> RID:
 	var u_ubo = RDUniform.new()
 	u_ubo.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
 	u_ubo.binding = 0
@@ -622,102 +683,115 @@ func _create_set_analysis(tex_state: RID, tex_genome: RID) -> RID:
 	u_genome.add_id(sampler_nearest)
 	u_genome.add_id(tex_genome)
 	
+	var u_genome_ext = RDUniform.new()
+	u_genome_ext.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	u_genome_ext.binding = 3
+	u_genome_ext.add_id(sampler_nearest)
+	u_genome_ext.add_id(tex_genome_ext)
+	
 	var u_analysis = RDUniform.new()
 	u_analysis.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
-	u_analysis.binding = 3
+	u_analysis.binding = 4
 	u_analysis.add_id(analysis_buffer)
 	
-	return rd.uniform_set_create([u_ubo, u_state, u_genome, u_analysis], shader_analysis, 0)
+	return rd.uniform_set_create([u_ubo, u_state, u_genome, u_genome_ext, u_analysis], shader_analysis, 0)
 
-func _create_set_flow_conservative(src_state: RID, src_genome: RID, src_sig: RID, tex_pot: RID, dst_state: RID, dst_genome: RID) -> RID:
+func _create_set_flow_conservative(src_state: RID, src_genome: RID, src_genome_ext: RID, src_potential: RID, src_sig: RID, dst_mass: RID, dst_state: RID, dst_genome: RID, dst_winner: RID) -> RID:
 	var u_ubo = RDUniform.new()
 	u_ubo.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
 	u_ubo.binding = 0
 	u_ubo.add_id(ubo)
 	
-	var u_src_state = RDUniform.new()
-	u_src_state.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-	u_src_state.binding = 1
-	u_src_state.add_id(sampler_linear)
-	u_src_state.add_id(src_state)
+	var u_state = RDUniform.new()
+	u_state.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	u_state.binding = 1
+	u_state.add_id(sampler_linear)
+	u_state.add_id(src_state)
 	
-	var u_src_genome = RDUniform.new()
-	u_src_genome.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-	u_src_genome.binding = 2
-	u_src_genome.add_id(sampler_nearest)
-	u_src_genome.add_id(src_genome)
+	var u_genome = RDUniform.new()
+	u_genome.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	u_genome.binding = 2
+	u_genome.add_id(sampler_nearest)
+	u_genome.add_id(src_genome)
 	
 	var u_pot = RDUniform.new()
 	u_pot.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 	u_pot.binding = 3
 	u_pot.add_id(sampler_linear)
-	u_pot.add_id(tex_pot)
+	u_pot.add_id(src_potential)
 	
-	var u_atomic = RDUniform.new()
-	u_atomic.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
-	u_atomic.binding = 4
-	u_atomic.add_id(tex_mass_accum)
+	var u_mass = RDUniform.new()
+	u_mass.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	u_mass.binding = 4
+	u_mass.add_id(dst_mass)
 	
-	var u_dst_state = RDUniform.new()
-	u_dst_state.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
-	u_dst_state.binding = 5
-	u_dst_state.add_id(dst_state)
+	var u_new_state = RDUniform.new()
+	u_new_state.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	u_new_state.binding = 5
+	u_new_state.add_id(dst_state)
 	
-	var u_dst_genome = RDUniform.new()
-	u_dst_genome.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
-	u_dst_genome.binding = 6
-	u_dst_genome.add_id(dst_genome)
+	var u_new_genome = RDUniform.new()
+	u_new_genome.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	u_new_genome.binding = 6
+	u_new_genome.add_id(dst_genome)
 	
 	var u_sig = RDUniform.new()
 	u_sig.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 	u_sig.binding = 7
 	u_sig.add_id(sampler_linear)
 	u_sig.add_id(src_sig)
-	
+
 	var u_winner = RDUniform.new()
 	u_winner.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
 	u_winner.binding = 8
-	u_winner.add_id(tex_winner_tracker)
+	u_winner.add_id(dst_winner)
 	
-	return rd.uniform_set_create([u_ubo, u_src_state, u_src_genome, u_pot, u_atomic, u_dst_state, u_dst_genome, u_sig, u_winner], shader_flow_conservative, 0)
+	var u_genome_ext = RDUniform.new()
+	u_genome_ext.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	u_genome_ext.binding = 9
+	u_genome_ext.add_id(sampler_nearest)
+	u_genome_ext.add_id(src_genome_ext)
+	
+	return rd.uniform_set_create([u_ubo, u_state, u_genome, u_pot, u_mass, u_new_state, u_new_genome, u_sig, u_winner, u_genome_ext], shader_flow_conservative, 0)
 
-func _create_set_normalize(tex_pot: RID, old_state: RID, old_genome: RID, dst_state: RID, dst_sig: RID, dst_genome: RID) -> RID:
+
+func _create_set_normalize(src_mass: RID, src_pot: RID, old_state: RID, dst_state: RID, dst_sig: RID, src_winner: RID, dst_genome: RID, old_genome: RID, src_genome_ext: RID, dst_genome_ext: RID) -> RID:
 	var u_ubo = RDUniform.new()
 	u_ubo.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
 	u_ubo.binding = 0
 	u_ubo.add_id(ubo)
 	
-	var u_atomic = RDUniform.new()
-	u_atomic.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
-	u_atomic.binding = 1
-	u_atomic.add_id(tex_mass_accum)
+	var u_mass = RDUniform.new()
+	u_mass.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	u_mass.binding = 1
+	u_mass.add_id(src_mass)
 	
 	var u_pot = RDUniform.new()
 	u_pot.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 	u_pot.binding = 2
 	u_pot.add_id(sampler_linear)
-	u_pot.add_id(tex_pot)
+	u_pot.add_id(src_pot)
 	
 	var u_old_state = RDUniform.new()
 	u_old_state.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 	u_old_state.binding = 3
-	u_old_state.add_id(sampler_nearest)  # Use nearest for precise gene transfer
+	u_old_state.add_id(sampler_linear)
 	u_old_state.add_id(old_state)
 	
-	var u_dst_state = RDUniform.new()
-	u_dst_state.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
-	u_dst_state.binding = 4
-	u_dst_state.add_id(dst_state)
+	var u_new_state = RDUniform.new()
+	u_new_state.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	u_new_state.binding = 4
+	u_new_state.add_id(dst_state)
 	
-	var u_dst_sig = RDUniform.new()
-	u_dst_sig.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
-	u_dst_sig.binding = 5
-	u_dst_sig.add_id(dst_sig)
+	var u_new_sig = RDUniform.new()
+	u_new_sig.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	u_new_sig.binding = 5
+	u_new_sig.add_id(dst_sig)
 	
 	var u_winner = RDUniform.new()
 	u_winner.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
 	u_winner.binding = 6
-	u_winner.add_id(tex_winner_tracker)
+	u_winner.add_id(src_winner)
 	
 	var u_new_genome = RDUniform.new()
 	u_new_genome.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
@@ -730,7 +804,18 @@ func _create_set_normalize(tex_pot: RID, old_state: RID, old_genome: RID, dst_st
 	u_old_genome.add_id(sampler_nearest)
 	u_old_genome.add_id(old_genome)
 	
-	return rd.uniform_set_create([u_ubo, u_atomic, u_pot, u_old_state, u_dst_state, u_dst_sig, u_winner, u_new_genome, u_old_genome], shader_normalize, 0)
+	var u_genome_ext_src = RDUniform.new()
+	u_genome_ext_src.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	u_genome_ext_src.binding = 9
+	u_genome_ext_src.add_id(sampler_nearest)
+	u_genome_ext_src.add_id(src_genome_ext)
+	
+	var u_genome_ext_dst = RDUniform.new()
+	u_genome_ext_dst.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	u_genome_ext_dst.binding = 10
+	u_genome_ext_dst.add_id(dst_genome_ext)
+	
+	return rd.uniform_set_create([u_ubo, u_mass, u_pot, u_old_state, u_new_state, u_new_sig, u_winner, u_new_genome, u_old_genome, u_genome_ext_src, u_genome_ext_dst], shader_normalize, 0)
 
 # === PUBLIC API ===
 
@@ -744,6 +829,8 @@ func clear_simulation():
 	rd.texture_clear(tex_state_b, Color(0,0,0,0), 0, 1, 0, 1)
 	rd.texture_clear(tex_genome_a, Color(0,0,0,0), 0, 1, 0, 1)
 	rd.texture_clear(tex_genome_b, Color(0,0,0,0), 0, 1, 0, 1)
+	rd.texture_clear(tex_genome_ext_a, Color(0,0,0,0), 0, 1, 0, 1)
+	rd.texture_clear(tex_genome_ext_b, Color(0,0,0,0), 0, 1, 0, 1)
 	rd.texture_clear(tex_signal_a, Color(0,0,0,0), 0, 1, 0, 1)
 	rd.texture_clear(tex_signal_b, Color(0,0,0,0), 0, 1, 0, 1)
 	# rd.barrier(RenderingDevice.BARRIER_MASK_COMPUTE) # barrier automatically inserted
@@ -770,8 +857,8 @@ func get_species_info_at(uv: Vector2) -> Dictionary:
 	var gy = int(uv.y * 64.0)
 	if gx < 0 or gx >= 64 or gy < 0 or gy >= 64: return {}
 	
-	var idx = (gy * 64 + gx) * 10 # 10 floats per cell
-	if (idx + 9) * 4 >= last_analysis_bytes.size(): return {} 
+	var idx = (gy * 64 + gx) * 18 # 18 floats per cell
+	if (idx + 17) * 4 >= last_analysis_bytes.size(): return {} 
 	
 	var floats = last_analysis_bytes.to_float32_array()
 	var base = idx
@@ -779,27 +866,23 @@ func get_species_info_at(uv: Vector2) -> Dictionary:
 	var m = floats[base]
 	if m < 0.05: return {} # Empty
 	
-	var mu = floats[base+1]
-	var sig = floats[base+2]
-	var rad = floats[base+3]
-	var flow = floats[base+4]
-	var aff = floats[base+5]
-	var den = floats[base+6]
-	var sec = floats[base+7]
-	var per = floats[base+8]
-	
-	# Parse spectral hues from packed slot 9
-	var packed_spectral = floats[base+9]
-	var emission_hue = fmod(packed_spectral, 1.0)
-	var detection_hue = (packed_spectral - emission_hue) / 0.001
-	detection_hue = clamp(detection_hue, 0.0, 1.0)
-	
 	var info = {
-		"mu": mu, "sigma": sig,
-		"radius": rad, "flow": flow,
-		"affinity": aff, "density_tol": den,
-		"secretion": sec, "perception": per,
-		"emission_hue": emission_hue, "detection_hue": detection_hue,
+		"mu": floats[base+1],
+		"sigma": floats[base+2],
+		"radius": floats[base+3],
+		"viscosity": floats[base+4],
+		"shape_a": floats[base+5],
+		"shape_b": floats[base+6],
+		"shape_c": floats[base+7],
+		"growth_rate": floats[base+8],
+		"affinity": floats[base+9],
+		"repulsion": floats[base+10],
+		"density_tol": floats[base+11],
+		"mobility": floats[base+12],
+		"secretion": floats[base+13],
+		"sensitivity": floats[base+14],
+		"emission_hue": floats[base+15],
+		"detection_hue": floats[base+16],
 		"mass": m
 	}
 	

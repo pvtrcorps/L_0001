@@ -4,41 +4,45 @@
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(set = 0, binding = 0, std430) buffer Params {
+    // 0. Globals
     vec2 u_res;
     float u_dt;
     float u_seed;
     float u_R;
-    float u_theta_A; // Previously _pad1
-    float u_alpha_n; // Previously _pad2
-    float u_temperature; // Temperature (s) for box distribution
-    float u_signal_advect; // Signal advection weight
-    float u_beta; // Selection pressure for negotiation rule
+    float u_theta_A;
+    float u_alpha_n;
+    float u_temperature;
+    float u_signal_advect;
+    float u_beta;
+    float u_signal_diff;
+    float u_signal_decay;
+    float u_flow_speed;
     float u_init_clusters;
     float u_init_density;
     float u_colonize_thr;
-    vec2 u_range_mu;
-    vec2 u_range_sigma;
-    vec2 u_range_radius;
-    vec2 u_range_flow;
-    vec2 u_range_affinity;
-    vec2 u_range_lambda;
-    float u_signal_diff;
-    float u_signal_decay;
-    vec2 u_range_secretion;
-    vec2 u_range_perception;
-    float _pad_end;
+    
+    // 1. Gene Ranges (16 Genes * 2) = 32 floats
+    // Block A: Physiology
+    vec2 r_mu; vec2 r_sigma; vec2 r_radius; vec2 r_viscosity;
+    // Block B: Morphology
+    vec2 r_shape_a; vec2 r_shape_b; vec2 r_shape_c; vec2 r_growth_rate;
+    // Block C: Social / Motor
+    vec2 r_affinity; vec2 r_repulsion; vec2 r_density_tol; vec2 r_mobility;
+    // Block D: Senses
+    vec2 r_secretion; vec2 r_sensitivity; vec2 r_emission_hue; vec2 r_detection_hue;
 } p;
 
 layout(set = 0, binding = 1) uniform sampler2D tex_state;
-layout(set = 0, binding = 2) uniform sampler2D tex_genome;
+layout(set = 0, binding = 2) uniform sampler2D tex_genome;      // Genes 1-8
 layout(set = 0, binding = 3) uniform sampler2D tex_potential;
 layout(set = 0, binding = 4, r32ui) uniform uimage2D img_mass_accum;
 layout(set = 0, binding = 5, rgba32f) uniform image2D img_new_state;
-layout(set = 0, binding = 6, rgba32f) uniform image2D img_new_genome;
+layout(set = 0, binding = 6, rgba32f) uniform image2D img_new_genome; // Unused for advection?
 layout(set = 0, binding = 7) uniform sampler2D tex_signal;
 layout(set = 0, binding = 8, r32ui) uniform uimage2D img_winner_tracker;
+layout(set = 0, binding = 9) uniform sampler2D tex_genome_ext;  // Genes 9-16 [NEW]
 
-// PCG Hash (2d -> 1d) - High Quality, no Trig functions
+// PCG Hash (2d -> 1d)
 uint pcg_hash(uvec2 v) {
     v = v * 1664525u + 1013904223u;
     v.x += v.y * 1664525u;
@@ -47,12 +51,10 @@ uint pcg_hash(uvec2 v) {
     v.x += v.y * 1664525u;
     v.y += v.x * 1664525u;
     v = v ^ (v >> 16u);
-    return v.x + v.y; // XOR mixing
+    return v.x + v.y;
 }
 
 float hash(vec2 pt) {
-    // Map float coordinate to uints for hashing
-    // Assuming pt is UV or similar, scaling helps avoid correlation
     uvec2 p = uvec2(floatBitsToUint(pt.x), floatBitsToUint(pt.y));
     return float(pcg_hash(p)) * (1.0/4294967296.0);
 }
@@ -71,34 +73,31 @@ vec2 unpack2(float packed) {
     return vec2(a, b);
 }
 
-float pack2(float a, float b) {
-    uint ia = uint(clamp(a, 0.0, 1.0) * 32767.0);
-    uint ib = uint(clamp(b, 0.0, 1.0) * 32767.0);
-    return uintBitsToFloat((ia << 15) | ib);
-}
-
 const float MASS_SCALE = 100000.0; 
 
-// Stochastic Rounding to preserve mass statistically
-// Using Robust Hash to avoid mass drift
+// Stochastic Rounding
 uint get_rounded_amount(float amount, vec2 seed) {
     uint i = uint(amount);
     float f = fract(amount);
-    
-    // Mix seed with amount to decorrelate
     float h = hash(seed + vec2(amount, amount * 0.123));
-    
-    if (h < f) {
-        i += 1u;
-    }
+    if (h < f) i += 1u;
     return i;
 }
 
-// 1D Box Intersection Area
-// Overlap between pixel interval [px_min, px_max] and cloud interval [cloud_min, cloud_max]
-float intersect_len(float px_min, float px_max, float cloud_min, float cloud_max) {
-    return max(0.0, min(px_max, cloud_max) - max(px_min, cloud_min));
+vec3 HueToRGB(float hue) {
+    float h = hue * 6.0;
+    float c = 1.0;
+    float x = c * (1.0 - abs(mod(h, 2.0) - 1.0));
+    vec3 rgb;
+    if (h < 1.0)      rgb = vec3(c, x, 0.0);
+    else if (h < 2.0) rgb = vec3(x, c, 0.0);
+    else if (h < 3.0) rgb = vec3(0.0, c, x);
+    else if (h < 4.0) rgb = vec3(0.0, x, c);
+    else if (h < 5.0) rgb = vec3(x, 0.0, c);
+    else              rgb = vec3(c, 0.0, x);
+    return rgb;
 }
+
 
 void main() {
     ivec2 uv_i = ivec2(gl_GlobalInvocationID.xy);
@@ -109,42 +108,38 @@ void main() {
     
     vec4 state = texture(tex_state, uv);
     float myMass = state.r;
-    float age = state.a;
     
-    // Genome Unpacking (New 8-Gene System)
-    vec4 myGenome = texture(tex_genome, uv);
-    // R: (b1_weight, b2_weight)
-    // G: (b3_weight, a2_pos)
-    // B: (kernel_width, kernel_radius)
-    // A: (growth_mu, growth_sigma)
-    vec2 growth_genes = unpack2(myGenome.a);
-    vec2 width_radius = unpack2(myGenome.b);
-    vec2 b3a2 = unpack2(myGenome.g);
+    if (myMass < 0.0001) return; // Optimization: Skip empty space (Atomic adds are expensive)
+
+    // === 1. Unpack Genes ===
+    vec4 g1 = texture(tex_genome, uv);
+    vec4 g2 = texture(tex_genome_ext, uv);
     
-    float growth_mu = growth_genes.x;
-    float growth_sigma = growth_genes.y;
-    float kernel_width = width_radius.x;
-    float kernel_radius = width_radius.y;
-    float a2_pos = b3a2.y;
+    // Physiology
+    vec2 rad_visc = unpack2(g1.g);
+    float g_viscosity = rad_visc.y; // [0-1] Inertia/Drag
     
-    // Spectral genes for perception
-    vec2 spectral_genes = unpack2(state.a);
-    float detection_hue = spectral_genes.y;
+    // Social / Motor
+    vec2 aff_rep = unpack2(g2.r);
+    float g_affinity = aff_rep.x;   // [0-1] Cohesion
+    float g_repulsion = aff_rep.y;  // [0-1] Personal Space
     
-    // Perception strength from gene (derived from stability)
-    // Low sigma (unstable/picky) -> High perception needed
-    float raw_perception = clamp(1.0 - growth_sigma, 0.0, 1.0);
+    vec2 tol_mob = unpack2(g2.g);
+    float g_density_tol = tol_mob.x;// [0-1] Pressure Resistance
+    float g_mobility = tol_mob.y;   // [0-1] Speed Multiplier
     
-    // Map to UI range
-    float perception_strength = mix(p.u_range_perception.x, p.u_range_perception.y, raw_perception);
-    // === 1. Calculate Gradient of Affinity U (using Sobel) ===
-    // We compute gradient of U (Growth) NOT density. 
-    // This allows flow away from center when density > mu due to G(u) shape.
+    // Senses
+    vec2 sig_gain = unpack2(g2.b);
+    float g_sensitivity = sig_gain.y; // [0-1] Signal Gain
     
+    vec2 hues = unpack2(g2.a);
+    float g_detection_hue = hues.y; // [0-1] Target Signal
+    
+    // === 2. Calculate Forces ===
+    
+    // A. Mass Potential Gradient (Attraction / Growth Direction)
+    // Sobel Filter for dU/dx, dU/dy
     vec2 pixel_size = 1.0 / p.u_res;
-    
-    // Sobel Kernels (transposed relative to typical CPU definition to match GLSL axes)
-    // dU/dx
     float gx = 0.0;
     gx += -1.0 * texture(tex_potential, uv + vec2(-1, -1)*pixel_size).r;
     gx += -2.0 * texture(tex_potential, uv + vec2(-1,  0)*pixel_size).r;
@@ -153,7 +148,6 @@ void main() {
     gx +=  2.0 * texture(tex_potential, uv + vec2( 1,  0)*pixel_size).r;
     gx +=  1.0 * texture(tex_potential, uv + vec2( 1,  1)*pixel_size).r;
     
-    // dU/dy
     float gy = 0.0;
     gy += -1.0 * texture(tex_potential, uv + vec2(-1, -1)*pixel_size).r;
     gy += -2.0 * texture(tex_potential, uv + vec2( 0, -1)*pixel_size).r;
@@ -162,203 +156,117 @@ void main() {
     gy +=  2.0 * texture(tex_potential, uv + vec2( 0,  1)*pixel_size).r;
     gy +=  1.0 * texture(tex_potential, uv + vec2( 1,  1)*pixel_size).r;
     
-    vec2 gradU_mass = vec2(gx, gy); // Magnitude is usually higher with Sobel, check scale
+    vec2 gradU = vec2(gx, gy);
     
-    // For Signal Gradient, we can still use the passed value or apply Sobel if needed.
-    // Keeping existing signal logic for now but applying Sobel to Mass Affinity is CRITICAL.
+    // APPLY AFFINITY (Cohesion)
+    // High affinity = Follows potential gradient strongly (Clumps)
+    // Low affinity = Drifts more (Cloud)
+    // Base affinity 1.0, scalable up to 3.0 via gene
+    gradU *= (0.5 + g_affinity * 2.5);
     
-    vec4 potential = texture(tex_potential, uv);
-    float U_growth = potential.r;     // Mass convolution result
-    // vec2 gradU_mass = potential.gb;   // Gradient of mass potential (now computed via Sobel)
-    float U_signal = potential.a;     // Spectral similarity at this pixel
-    
-    // === SPECTRAL SIGNAL GRADIENT ===
-    // Compute gradient of U_signal from neighboring pixels
+    // B. Signal Gradient (Chemotaxis)
+    // Compute gradient of spectral similarity (U_signal)
     ivec2 res_i = ivec2(p.u_res);
-    ivec2 l_uv = (uv_i + ivec2(-1, 0) + res_i) % res_i;
-    ivec2 r_uv = (uv_i + ivec2(1, 0) + res_i) % res_i;
-    ivec2 u_uv = (uv_i + ivec2(0, -1) + res_i) % res_i;
-    ivec2 d_uv = (uv_i + ivec2(0, 1) + res_i) % res_i;
+    ivec2 l_uv = (uv_i + ivec2(-1, 0) + ivec2(p.u_res)) % ivec2(p.u_res);
+    ivec2 r_uv = (uv_i + ivec2(1, 0) + ivec2(p.u_res)) % ivec2(p.u_res);
+    ivec2 u_uv = (uv_i + ivec2(0, -1) + ivec2(p.u_res)) % ivec2(p.u_res);
+    ivec2 d_uv = (uv_i + ivec2(0, 1) + ivec2(p.u_res)) % ivec2(p.u_res);
     
-    // Read U_signal from neighboring potential textures (already contains spectral similarity)
-    float sigL = texelFetch(tex_potential, l_uv, 0).a;
-    float sigR = texelFetch(tex_potential, r_uv, 0).a;
-    float sigU = texelFetch(tex_potential, u_uv, 0).a;
-    float sigD = texelFetch(tex_potential, d_uv, 0).a;
-    vec2 gradU_signal = vec2(sigR - sigL, sigD - sigU);
+    // We must re-compute signal matching here or assume tex_potential.a has it.
+    // tex_potential.a stores U_signal computed in Step 1.
+    // U_signal = dot(signal, myDetector).
+    // This is correct because compute_convolution updated U_signal based on *my* genome at that pixel.
+    float sL = texelFetch(tex_potential, l_uv, 0).a;
+    float sR = texelFetch(tex_potential, r_uv, 0).a;
+    float sU = texelFetch(tex_potential, u_uv, 0).a;
+    float sD = texelFetch(tex_potential, d_uv, 0).a;
+    vec2 gradSignal = vec2(sR - sL, sD - sU);
     
-    // === UNIFIED FLOW POTENTIAL ===
-    // U_flow = U_growth + perception * U_signal
-    vec2 gradU = gradU_mass + perception_strength * gradU_signal;
+    // APPLY SENSITIVITY
+    // Combine Growth Gradient + Signal Gradient
+    // Signal Advect controls global weight, Sensitivity controls per-species gain
+    vec2 totalAttraction = gradU + gradSignal * p.u_signal_advect * (g_sensitivity * 3.0);
     
-    // === DENSITY GRADIENT (Repulsion / Pressure) ===
+    // C. Density Gradient (Repulsion)
+    // High density pressure
     float mR = texelFetch(tex_state, r_uv, 0).r;
     float mL = texelFetch(tex_state, l_uv, 0).r;
     float mD = texelFetch(tex_state, d_uv, 0).r;
     float mU = texelFetch(tex_state, u_uv, 0).r;
     vec2 gradA = vec2(mR - mL, mD - mU);
-
-    // === EQUATION 5: Flow F = (1-alpha)*grad(G(U)) - alpha*grad(A) ===
     
-    // alpha = [(A / theta_A)^n] clamped to [0,1]
-    // 3. Alpha Calculation
-    // Use UI parameter for theta_A (Critical Mass)
-    float theta_A = p.u_theta_A;
-    // Use UI parameter for alpha_n (Sharpness) 
-    float alpha_n = p.u_alpha_n;
-    float alpha_val = clamp(pow(myMass / max(theta_A, 0.001), alpha_n), 0.0, 1.0);
+    // APPLY REPULSION GENE
+    gradA *= (0.5 + g_repulsion * 2.5);
     
-    // Official Flow Formula: nU * (1-alpha) - nA * alpha
-    // Equivalent to: mix(gradU, -gradA, alpha)
-    // Official code does NOT use a flow_speed multiplier (implies 1.0)
-    // But we check kernel_width to give some variety
+    // D. Compute Velocity Field
+    // alpha = (mass / theta)^n
+    // APPLY DENSITY TOLERANCE: Modulates theta_A (Critical Mass)
+    // High tolerance = High Theta = Low Alpha (Less repulsion)
+    float local_theta = p.u_theta_A * (0.5 + g_density_tol * 2.0);
+    float alpha = pow(max(myMass, 0.0) / max(local_theta, 0.001), p.u_alpha_n);
     
-    float base_flow_speed = 1.0;
-    vec2 force_affinity = gradU * base_flow_speed;
-    vec2 force_repulsion = -gradA * base_flow_speed;
+    // V = Speed * (Attraction - Alpha * Repulsion)
+    // APPLY MOBILITY
+    float speed_mult = p.u_flow_speed * (0.2 + g_mobility * 1.8);
+    vec2 vel = speed_mult * (totalAttraction - alpha * gradA);
     
-    vec2 totalVelocity = mix(force_affinity, force_repulsion, alpha_val);
+    // APPLY VISCOSITY (Drag)
+    // V_final = V * (1 - viscosity)
+    vel *= clamp(1.0 - g_viscosity * 0.9, 0.1, 1.0);
     
-    // Velocity Clipping (Critical for stability)
-    // Official: clip to [-(dd-sigma), +(dd-sigma)]
-    // dd=5, sigma=0.65 -> +/- 4.35
-    float max_vel = 4.0; 
-    totalVelocity = clamp(totalVelocity, -max_vel, max_vel);
     
-    // === MASS ADVECTION (Conservative) with Temperature ===
-    vec2 targetUV = uv + totalVelocity * p.u_dt * px;
-    // Fix: Remove -0.5 offset. 
-    // Pixel 'i' covers continuous range [i, i+1]. Its center is i+0.5.
-    // targetUV * res gives the continuous coordinate where 0.5 is centers.
-    vec2 targetPx = targetUV * p.u_res; 
+    // === 3. Mass Advection (Scatter) ===
+    // Distribution to 4 neighbors
+    vec2 pos_next = uv * p.u_res + vel * p.u_dt;
     
-    float survivingMass = myMass; 
+    // Wrap coordinates
+    pos_next = mod(pos_next, p.u_res);
     
-    // Temperature S: Half-width of the square distribution
-    float s = max(p.u_temperature, 0.01);
+    // Bilinear Scatter
+    vec2 start_cell_f = floor(pos_next - 0.5);
+    ivec2 start_cell = ivec2(start_cell_f);
+    vec2 f = pos_next - 0.5 - start_cell_f; // Fractional part
     
-    if (survivingMass > 0.0) {
-        // Target Cloud bounds (in pixel coords)
-        vec2 cloudMax = targetPx + vec2(s);
-        vec2 cloudMin = targetPx - vec2(s);
+    // Distribute mass
+    // 00 10
+    // 01 11
+    float w00 = (1.0 - f.x) * (1.0 - f.y);
+    float w10 = f.x * (1.0 - f.y);
+    float w01 = (1.0 - f.x) * f.y;
+    float w11 = f.x * f.y;
+    
+    ivec2 c00 = (start_cell + ivec2(0, 0) + ivec2(p.u_res)) % ivec2(p.u_res);
+    ivec2 c10 = (start_cell + ivec2(1, 0) + ivec2(p.u_res)) % ivec2(p.u_res);
+    ivec2 c01 = (start_cell + ivec2(0, 1) + ivec2(p.u_res)) % ivec2(p.u_res);
+    ivec2 c11 = (start_cell + ivec2(1, 1) + ivec2(p.u_res)) % ivec2(p.u_res);
+    
+    // Atomic accumulation (using robust int mapping)
+    uint amount = uint(myMass * MASS_SCALE);
+    if (amount > 0) {
+        imageAtomicAdd(img_mass_accum, c00, uint(float(amount) * w00));
+        imageAtomicAdd(img_mass_accum, c10, uint(float(amount) * w10));
+        imageAtomicAdd(img_mass_accum, c01, uint(float(amount) * w01));
+        imageAtomicAdd(img_mass_accum, c11, uint(float(amount) * w11));
         
-        // Affected Pixels Range
-        ivec2 iMin = ivec2(floor(cloudMin));
-        ivec2 iMax = ivec2(ceil(cloudMax)); // Exclusive? No, ceil gives upper integer
-        // Actually, if cloudMax is 5.2, ceil is 6. The pixel at 5 (5.0-6.0) is included.
-        // We iterate pixels p. Bounds of pixel p are [p, p+1].
-        // Intersection of [p, p+1] with [cloudMin, cloudMax].
+        // WINNER TRACKING (For Genome Inheritance)
+        // We pack (Mass Contribution << 20) | (Source Index)
+        // Mass Contribution uses 12 bits (Max 4096 -> ~40.0 mass units)
+        // Source Index uses 20 bits (Max 1M -> 1024x1024 resolution)
         
-        // Optimization: Don't loop too far. With s=0.6, range is small (~2x2 or 3x3).
+        uint src_idx = uint(uv_i.y) * uint(p.u_res.x) + uint(uv_i.x);
+        // Ensure index fits in 20 bits
+        src_idx = src_idx & 0xFFFFFu; 
         
-        ivec2 res = ivec2(p.u_res);
-        float totalArea = (2.0 * s) * (2.0 * s); // Should be this analytically
+        // Calculate contribution for each neighbor (scaled by 100 for precision)
+        // Max mass 40.0 * 100 = 4000 < 4096 (12 bits)
+        uint m00 = uint(clamp(myMass * w00 * 100.0, 0.0, 40.0));
+        uint m10 = uint(clamp(myMass * w10 * 100.0, 0.0, 40.0));
+        uint m01 = uint(clamp(myMass * w01 * 100.0, 0.0, 40.0));
+        uint m11 = uint(clamp(myMass * w11 * 100.0, 0.0, 40.0));
         
-        // Iterate over potential candidate pixels
-        for (int y = iMin.y; y < iMax.y; y++) {
-            float y_min = float(y);
-            float y_max = float(y + 1);
-            float h = intersect_len(y_min, y_max, cloudMin.y, cloudMax.y);
-            if (h <= 0.0) continue;
-            
-            for (int x = iMin.x; x < iMax.x; x++) {
-                float x_min = float(x);
-                float x_max = float(x + 1);
-                float w = intersect_len(x_min, x_max, cloudMin.x, cloudMax.x);
-                
-                if (w > 0.0) {
-                    float area = w * h;
-                    float weight = area / totalArea; // Normalize so sum(weights) = 1.0 across all pixels
-                    
-                    // Add mass to this neighbor
-                    ivec2 p_neighbor = (ivec2(x, y) % res + res) % res; // Wrap
-                    
-                    uint m_int = uint(survivingMass * MASS_SCALE);
-                    imageAtomicAdd(img_mass_accum, p_neighbor, get_rounded_amount(float(m_int) * weight, uv + vec2(float(x)*0.1, float(y)*0.1)));
-                }
-            }
-        }
+        if (m00 > 0) imageAtomicMax(img_winner_tracker, c00, (m00 << 20u) | src_idx);
+        if (m10 > 0) imageAtomicMax(img_winner_tracker, c10, (m10 << 20u) | src_idx);
+        if (m01 > 0) imageAtomicMax(img_winner_tracker, c01, (m01 << 20u) | src_idx);
+        if (m11 > 0) imageAtomicMax(img_winner_tracker, c11, (m11 << 20u) | src_idx);
     }
-    
-    // === GENOME ADVECTION with BOX DISTRIBUTION & NEGOTIATION RULE ===
-    // Paper-compliant: Use SAME box distribution as mass (Equations 6-7, ISAL 2023)
-    // Negotiation Rule: Priority based on mass × exp(β × V(x_src)) (IMGEP 2025)
-    if (survivingMass > 0.0) {
-        // Use SAME box distribution parameters as mass transport
-        // This ensures genome spreads to ~4-9 pixels (not just 4)
-        vec2 cloudMax = targetPx + vec2(s);
-        vec2 cloudMin = targetPx - vec2(s);
-        
-        ivec2 iMin = ivec2(floor(cloudMin));
-        ivec2 iMax = ivec2(ceil(cloudMax));
-        ivec2 res = ivec2(p.u_res);
-        float totalArea = (2.0 * s) * (2.0 * s);
-        
-        // Compute negotiation priority using affinity map
-        // V(x_src) = U_growth (already computed in convolution pass)
-        // β = selection pressure parameter (higher = more competitive)
-        
-        // Normalize U_growth to typical range [0, 1] before exponential
-        // Typical U_growth range: [0.0, 0.5] → normalize to [0, 1]
-        float normalized_U = clamp((U_growth - 0.1) / 0.3, 0.0, 1.0);
-        
-        // Centered exponential: exp(β × (U - 0.5))
-        // At U=0.5 (neutral): affinity_factor = 1.0
-        // At U=0.0 (poor): affinity_factor = exp(-β/2)
-        // At U=1.0 (excellent): affinity_factor = exp(β/2)
-        float affinity_exponent = p.u_beta * (normalized_U - 0.5);
-        float affinity_factor = exp(affinity_exponent);
-        
-        // Cap maximum advantage to prevent single-species dominance
-        // With beta=1.0: max factor ≈ 1.65x (reasonable)
-        // With beta=2.0: max factor ≈ 2.72x (competitive)
-        affinity_factor = min(affinity_factor, 5.0);
-        
-        // Anti-Bias: Hash the source index to prevent spatial preference
-        uint raw_idx = uint(uv_i.y * res.x + uv_i.x);
-        uint seed_bits = floatBitsToUint(p.u_seed);
-        uint frame_mask = pcg_hash_1d(seed_bits) & 0xFFFFFFu;
-        uint scrambled_idx = raw_idx ^ frame_mask;
-        
-        // Iterate over all pixels in the box distribution
-        for (int y = iMin.y; y < iMax.y; y++) {
-            float y_min = float(y);
-            float y_max = float(y + 1);
-            float h = intersect_len(y_min, y_max, cloudMin.y, cloudMax.y);
-            if (h <= 0.0) continue;
-            
-            for (int x = iMin.x; x < iMax.x; x++) {
-                float x_min = float(x);
-                float x_max = float(x + 1);
-                float w = intersect_len(x_min, x_max, cloudMin.x, cloudMax.x);
-                
-                if (w > 0.0) {
-                    float area = w * h;
-                    float weight = area / totalArea;
-                    
-                    // Negotiation Rule Priority:
-                    // P ∝ mass × I(src,dest) × exp(β × V(src))
-                    float mass_contribution = survivingMass * weight;
-                    float negotiation_priority = mass_contribution * affinity_factor;
-                    
-                    // Add small jitter to break ties
-                    float jitter = hash(uv + vec2(float(x) * 0.1, float(y) * 0.1)) * 0.01;
-                    negotiation_priority += jitter;
-                    
-                    // Pack into atomic-friendly format
-                    // [Priority (12b)] [Scrambled Index (20b)]
-                    uint priority_bits = uint(clamp(negotiation_priority * 1000.0, 0.0, 4095.0));
-                    uint packed = (priority_bits << 20) | (scrambled_idx & 0xFFFFFu);
-                    
-                    // Compete for winner position in destination pixel
-                    ivec2 p_neighbor = (ivec2(x, y) % res + res) % res;
-                    imageAtomicMax(img_winner_tracker, p_neighbor, packed);
-                }
-            }
-        }
-    }
-    
-    // Write State (Advected Mass is accumulated in img_mass_accum via atomicAdd above)
-    // We store Velocity and Age here for the next frame's "Previous State"
-    imageStore(img_new_state, uv_i, vec4(0.0, totalVelocity, age + p.u_dt));
 }

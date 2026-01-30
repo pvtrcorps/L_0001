@@ -3,130 +3,139 @@ extends RefCounted
 
 # Analyzing 64x64 grid (4096 samples)
 const GRID_SIZE = 64
-const CELL_FLOATS = 10 # Struct size in floats (40 bytes)
-const MASS_THRESHOLD = 0.05 # Minimum avg mass
-const GENE_SIMILARITY_THRESHOLD = 0.1 # Max distance to be same species
+const CELL_FLOATS = 18 # Mass (1) + Genes (16) + Padding (1) = 18
+const MASS_THRESHOLD = 0.05
+const GENE_SIMILARITY_THRESHOLD = 0.25 # Slightly looser for high-D space
 
 class Species:
 	var id: int
 	var mass: float = 0.0
 	var area: int = 0
 	
-	# Genetic Centroid (Running Average)
+	# Storage for all 16 genes
 	var genes_sum = {
-		"mu": 0.0, "sigma": 0.0, "radius": 0.0, 
-		"flow": 0.0, "affinity": 0.0, "density_tol": 0.0,
-		"secretion": 0.0, "perception": 0.0,
-		"emission_hue": 0.0, "detection_hue": 0.0
+		# Phys
+		"mu": 0.0, "sigma": 0.0, "radius": 0.0, "viscosity": 0.0,
+		# Morph
+		"shape_a": 0.0, "shape_b": 0.0, "shape_c": 0.0, "growth_rate": 0.0,
+		# Behavior
+		"affinity": 0.0, "repulsion": 0.0, "density_tol": 0.0, "mobility": 0.0,
+		# Senses
+		"secretion": 0.0, "sensitivity": 0.0, "emission_hue": 0.0, "detection_hue": 0.0
 	}
 	
-	# Current Average Genes
 	var genes = {}
 	var color: Color
 	var name: String = "Unknown"
 	
-	func add_sample(mu, sig, rad, flow, aff, den, sec, per, em_hue, det_hue, m):
+	func add_sample(sample_genes: Array, m: float):
 		area += 1
 		mass += m
-		genes_sum["mu"] += mu
-		genes_sum["sigma"] += sig
-		genes_sum["radius"] += rad
-		genes_sum["flow"] += flow
-		genes_sum["affinity"] += aff
-		genes_sum["density_tol"] += den
-		genes_sum["secretion"] += sec
-		genes_sum["perception"] += per
-		genes_sum["emission_hue"] += em_hue
-		genes_sum["detection_hue"] += det_hue
+		
+		genes_sum["mu"] += sample_genes[0]
+		genes_sum["sigma"] += sample_genes[1]
+		genes_sum["radius"] += sample_genes[2]
+		genes_sum["viscosity"] += sample_genes[3]
+		
+		genes_sum["shape_a"] += sample_genes[4]
+		genes_sum["shape_b"] += sample_genes[5]
+		genes_sum["shape_c"] += sample_genes[6]
+		genes_sum["growth_rate"] += sample_genes[7]
+		
+		genes_sum["affinity"] += sample_genes[8]
+		genes_sum["repulsion"] += sample_genes[9]
+		genes_sum["density_tol"] += sample_genes[10]
+		genes_sum["mobility"] += sample_genes[11]
+		
+		genes_sum["secretion"] += sample_genes[12]
+		genes_sum["sensitivity"] += sample_genes[13]
+		genes_sum["emission_hue"] += sample_genes[14]
+		genes_sum["detection_hue"] += sample_genes[15]
 		
 	func finalize():
 		if area == 0: return
 		var n = float(area)
-		genes = {
-			"mu": genes_sum["mu"] / n,
-			"sigma": genes_sum["sigma"] / n,
-			"radius": genes_sum["radius"] / n,
-			"flow": genes_sum["flow"] / n,
-			"affinity": genes_sum["affinity"] / n,
-			"density_tol": genes_sum["density_tol"] / n,
-			"secretion": genes_sum["secretion"] / n,
-			"perception": genes_sum["perception"] / n,
-			"emission_hue": genes_sum["emission_hue"] / n,
-			"detection_hue": genes_sum["detection_hue"] / n
-		}
 		
-		# Calculate Color
-		# Calculate Color (RGB Vector Mapping)
-		var r = genes["mu"]
-		var g = genes["flow"]
-		var b = genes["affinity"]
+		for k in genes_sum.keys():
+			genes[k] = genes_sum[k] / n
 		
-		# Boost saturation to match shader aesthetics
-		r = pow(r, 0.8) * 1.2
-		g = pow(g, 0.8) * 1.2
-		b = pow(b, 0.8) * 1.2
+		# Calculate Color based on Hue Emission
+		# If emission is low, fallback to physiology colors?
+		# Actually, let's use Emission Hue primarily as it's the "Signal" color
+		var hues = genes["emission_hue"]
+		var sat = 0.8
+		var val = 1.0
 		
-		color = Color(r, g, b, 1.0)
+		# Use HSV for spectral accuracy
+		color = Color.from_hsv(hues, sat, val)
 		
 		_generate_name()
 
 	func _generate_name():
 		var mu = genes["mu"]
-		var flow = genes["flow"]
-		var den = genes["density_tol"]
-		var sec = genes["secretion"]
 		var rad = genes["radius"]
+		var mob = genes["mobility"]
+		var aff = genes["affinity"]
 		
-		# 1. Morphology (Mu/Archetype) - The Noun
+		# 1. Physiology (Mu) -> Noun
 		var noun = "Proto"
-		if mu < 0.2: noun = "Globus"      # Blob
-		elif mu < 0.4: noun = "Amorph"    # Shapeless
-		elif mu < 0.6: noun = "Vermes"    # Worm
-		elif mu < 0.8: noun = "Cellula"   # Cell
-		else: noun = "Structura"          # Structure
+		if mu < 0.2: noun = "Globus"
+		elif mu < 0.4: noun = "Limbus"
+		elif mu < 0.6: noun = "Vermes"
+		elif mu < 0.8: noun = "Cellula"
+		else: noun = "Structura"
 		
-		# 2. Density/Matter (DensityTol) - The Texture Adjective
-		var texture = ""
-		if den < 0.3: texture = " Nebulae"    # Gas/Mist
-		elif den < 0.6: texture = " Flexus"   # Flexible
-		elif den < 0.8: texture = " Solidus"  # Solid
-		else: texture = " Durus"              # Hard/Rock
+		# 2. Size (Radius) -> Adjective 1
+		var size_adj = ""
+		if rad < 0.3: size_adj = "Micro "
+		elif rad > 0.7: size_adj = "Mega "
 		
-		# 3. Mobility (Flow) - The Prefix/Suffix
-		var motion = ""
-		if flow > 0.7: motion = "Velox "      # Fast
-		elif flow < 0.2: motion = "Pigra "    # Lazy/Slow
+		# 3. Behavior (Mobility/Affinity) -> Adjective 2
+		var beh_adj = ""
+		if mob > 0.7: beh_adj = "Velox" # Fast
+		elif mob < 0.3: beh_adj = "Pigra" # Slow
+		elif aff > 0.7: beh_adj = "Socialis" # Social
+		elif aff < 0.3: beh_adj = "Solus" # Loner
+		else: beh_adj = "Vagus" # Wandering
 		
-		# 4. Abilities (Secretion/Perception) - Honorifics
-		var ability = ""
-		if sec > 0.6: ability = " Chemicus"
-		if genes["perception"] > 0.6: ability = " Sapiens"
-		if sec > 0.6 and genes["perception"] > 0.6: ability = " Hive"
-		
-		# 5. Size (Radius)
-		var size_tag = ""
-		if rad > 0.8: size_tag = " Titan"
-		if rad < 0.2: size_tag = " Micro"
-		
-		name = motion + noun + texture + ability + size_tag
+		name = size_adj + noun + " " + beh_adj
 
-# Optimized weighted distance
+# Weighted genetic distance
 static func get_fast_dist(g1: PackedFloat32Array, g2: PackedFloat32Array) -> float:
 	var d = 0.0
-	d += abs(g1[0] - g2[0]) * 1.5 # mu
+	# Physiology (High weight)
+	d += abs(g1[0] - g2[0]) * 2.0 # mu
 	d += abs(g1[1] - g2[1]) * 1.5 # sigma
-	if d > GENE_SIMILARITY_THRESHOLD: return d # Fast exit
 	d += abs(g1[2] - g2[2]) * 1.0 # radius
-	d += abs(g1[4] - g2[4]) * 1.0 # affinity
+	d += abs(g1[3] - g2[3]) * 0.5 # viscosity
+	d += abs(g1[4] - g2[4]) * 0.8 # shape_a
+	d += abs(g1[8] - g2[8]) * 0.5 # affinity
+	d += abs(g1[11] - g2[11]) * 1.0 # mobility
+	
+	# Emission Hue (Critical for speciation)
+	# Handle circular distance for hue? [0,1]
+	# Simple diff for now
+	var hue_diff = abs(g1[14] - g2[14])
+	if hue_diff > 0.5: hue_diff = 1.0 - hue_diff
+	d += hue_diff * 2.0
+	
 	return d
 
-# Dictionary-friendly version for UI/Inspection
 static func get_gene_distance(g1: Dictionary, g2: Dictionary) -> float:
+	# Keep consistent with fast_dist
 	var d = 0.0
-	d += abs(g1["mu"] - g2["mu"]) * 1.5
+	d += abs(g1["mu"] - g2["mu"]) * 2.0
 	d += abs(g1["sigma"] - g2["sigma"]) * 1.5
 	d += abs(g1["radius"] - g2["radius"]) * 1.0
-	d += abs(g1["affinity"] - g2["affinity"]) * 1.0
+	d += abs(g1.get("viscosity",0.0) - g2.get("viscosity",0.0)) * 0.5
+	d += abs(g1.get("shape_a",0.0) - g2.get("shape_a",0.0)) * 0.8
+	d += abs(g1.get("affinity",0.0) - g2.get("affinity",0.0)) * 0.5
+	d += abs(g1.get("mobility",0.0) - g2.get("mobility",0.0)) * 1.0
+	var h1 = g1["emission_hue"]
+	var h2 = g2["emission_hue"]
+	var hd = abs(h1 - h2)
+	if hd > 0.5: hd = 1.0 - hd
+	d += hd * 2.0
 	return d
 
 func find_species(byte_data: PackedByteArray) -> Array:
@@ -135,8 +144,6 @@ func find_species(byte_data: PackedByteArray) -> Array:
 		
 	var floats = byte_data.to_float32_array()
 	var species_list: Array[Species] = []
-	
-	# Cache gene arrays to avoid Dictionary hits in the hot loop
 	var species_genes: Array[PackedFloat32Array] = []
 	
 	var count = GRID_SIZE * GRID_SIZE
@@ -145,49 +152,45 @@ func find_species(byte_data: PackedByteArray) -> Array:
 		var m = floats[base]
 		if m <= MASS_THRESHOLD: continue
 		
-		# Parse spectral hues from packed slot 9: emission + detection*0.001
-		var packed_spectral = floats[base+9]
-		var emission_hue = fmod(packed_spectral, 1.0)
-		var detection_hue = (packed_spectral - emission_hue) / 0.001
-		detection_hue = clamp(detection_hue, 0.0, 1.0)
-		
-		# Current cell genes as array (8 base genes)
-		var cg = PackedFloat32Array([
-			floats[base+1], floats[base+2], floats[base+3], floats[base+4],
-			floats[base+5], floats[base+6], floats[base+7], floats[base+8]
-		])
-		
+		# Collect all 16 genes
+		var cg = PackedFloat32Array()
+		cg.resize(16)
+		for k in range(16):
+			cg[k] = floats[base + 1 + k]
+			
 		var best_match_idx = -1
 		var min_dist = GENE_SIMILARITY_THRESHOLD
 		
-		# Hot Loop: Compare against existing centroids
 		for j in range(species_genes.size()):
 			var d = get_fast_dist(species_genes[j], cg)
 			if d < min_dist:
 				min_dist = d
 				best_match_idx = j
-				if d < 0.02: break # "Close enough" exit
+				if d < 0.05: break
 		
 		if best_match_idx != -1:
-			species_list[best_match_idx].add_sample(cg[0], cg[1], cg[2], cg[3], cg[4], cg[5], cg[6], cg[7], emission_hue, detection_hue, m)
-		elif species_list.size() < 64: # Hard cap on species count
+			# Convert PackedFloat32Array to Array for helper
+			var arr = []
+			for k in range(16): arr.append(cg[k])
+			species_list[best_match_idx].add_sample(arr, m)
+		elif species_list.size() < 64:
 			var s = Species.new()
 			s.id = species_list.size() + 1
-			s.genes = { 
-				"mu": cg[0], "sigma": cg[1], "radius": cg[2], "flow": cg[3], 
-				"affinity": cg[4], "density_tol": cg[5], "secretion": cg[6], "perception": cg[7],
-				"emission_hue": emission_hue, "detection_hue": detection_hue
-			}
-			s.add_sample(cg[0], cg[1], cg[2], cg[3], cg[4], cg[5], cg[6], cg[7], emission_hue, detection_hue, m)
+			
+			var arr = []
+			for k in range(16): arr.append(cg[k])
+			s.add_sample(arr, m)
+			
 			species_list.append(s)
 			species_genes.append(cg)
-	
-	# Finalize and Filter
+			
+	# Finalize
 	var final_list = []
 	for s in species_list:
-		s.finalize()
-		if s.mass > 1.0:
-			final_list.append(s)
+		if s.area > 0: # Ensure valid
+			s.finalize()
+			if s.mass > 1.0:
+				final_list.append(s)
 			
 	final_list.sort_custom(func(a, b): return a.mass > b.mass)
 	return final_list

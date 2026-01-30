@@ -27,7 +27,7 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_signal_decay;
     vec2 u_range_secretion;
     vec2 u_range_perception;
-    float _pad_end;
+    float u_flow_speed; // Previously _pad_end
 } p;
 
 layout(set = 0, binding = 1) uniform sampler2D tex_signal_src;

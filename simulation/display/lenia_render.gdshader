@@ -2,6 +2,7 @@ shader_type canvas_item;
 
 uniform sampler2D tex_state : repeat_enable, filter_linear;
 uniform sampler2D tex_genome : repeat_enable, filter_nearest;
+uniform sampler2D tex_genome_ext : repeat_enable, filter_nearest; // [NEW] Valid data
 uniform sampler2D tex_signal; // [NEW]
 uniform vec2 camera_pos = vec2(0.0, 0.0);
 uniform float camera_zoom = 1.0;
@@ -31,17 +32,20 @@ vec3 get_pixel_color(ivec2 coords, vec2 tex_size) {
     vec4 genome = texture(tex_genome, uv);
     
     // Decode genes
+    // Decode genes matching compute_init.glsl packing
+    // A: (mu, sigma) -> Stored in R
     vec2 mu_sigma = unpack2(genome.r);
     float g_mu = mu_sigma.x;
     float g_sigma = mu_sigma.y;
     
-    vec2 affinity_lambda = unpack2(genome.b);
-    float g_affinity = affinity_lambda.x;
+    // B: (radius, viscosity) -> Stored in G
+    vec2 rad_visc = unpack2(genome.g);
+    float g_flow = rad_visc.y; // Viscosity as proxy for flow properties
+    float g_radius = rad_visc.x;
     
-    // Color mapping logic - UNIFIED with Signal Vector
-    // Signal Vector was: vec3(g_mu, g_flow, g_affinity)
-    vec2 radius_flow = unpack2(genome.g);
-    float g_flow = radius_flow.y;
+    // Affinity is not physically stored in genome currently (Phantom Gene)
+    // We use a neutral value or we could map sigma to it for visualization
+    float g_affinity = 0.5; 
     
     // Direct RGB Mapping to match the "Scent"
     // R = Mu (Growth/Physiology)
@@ -113,9 +117,9 @@ void fragment() {
     col *= smoothstep(0.0, 0.15, mass);
     
     // Signal layer visualization (Full RGB)
-    // Add signal using LIGHTEN blend mode (max) instead of Additive
-    vec3 signal_col = signal * 0.5; // Boost slightly as Lighten doesn't accumulate brightness
-    col = max(col, signal_col);
+    // Additive blending for glow
+    vec3 signal_col = signal * 2.0; 
+    col += signal_col;
     
     // Highlight Logic
     // Re-sample central genome for selection logic (Nearest Neighbor)
@@ -123,12 +127,18 @@ void fragment() {
     vec2 mu_sigma = unpack2(genome.r);
     float g_mu = mu_sigma.x;
     float g_sigma = mu_sigma.y;
-    vec2 affinity_lambda = unpack2(genome.b);
-    float g_affinity = affinity_lambda.x;
+    
+    vec2 rad_visc = unpack2(genome.g);
+    float g_radius = rad_visc.x;
+    // float g_width = width_radius.x;
+    
+
+    vec4 genome_ext = texture(tex_genome_ext, uv);
+    vec2 aff_rep = unpack2(genome_ext.r);
+    float g_affinity = aff_rep.x;
 
     if (u_show_select) {
-        vec2 radius_flow = unpack2(genome.g);
-        float g_radius = radius_flow.x;
+        // match u_select_vector components: (mu, sigma, radius, affinity)
         
         float d = 0.0;
         d += abs(g_mu - u_select_vector.x) * 1.5;
@@ -154,7 +164,7 @@ void fragment() {
     // Lower gamma (< 1.0) = Higher contrast.
     col = pow(col, vec3(0.9));
     
-    if (mass < 0.01 && length(signal) < 0.05) {
+    if (mass < 0.01 && length(signal) < 0.01) {
         col = vec3(0.0);
     }
     

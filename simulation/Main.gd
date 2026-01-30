@@ -25,7 +25,8 @@ var ui_schema = {
 		["temperature", "Temperature (s)", 0.0, 3.0, 0.05],
 		["theta_A", "Global Density Mult", 0.1, 5.0, 0.1],
 		["alpha_n", "Repulsion Sharpness (n)", 1.0, 8.0, 0.1],
-		["beta_selection", "Selection Pressure (β)", 0.0, 3.0, 0.1]
+		["beta_selection", "Selection Pressure (β)", 0.0, 3.0, 0.1],
+		["flow_speed", "Flow Speed", 1.0, 100.0, 0.5]
 	],
 	"Chemical Signal": [
 		["signal_diff", "Diffusion Rate", 0.0, 10.0, 0.1],
@@ -39,16 +40,18 @@ var ui_schema = {
 		["g_sigma_max", "Stability (Sigma) Max", 0.0, 1.0, 0.05],
 		["g_radius_min", "Effect Radius Min", 0.0, 1.0, 0.05],
 		["g_radius_max", "Effect Radius Max", 0.0, 1.0, 0.05],
-		["g_flow_min", "Mobility (Flow) Min", 0.0, 1.0, 0.05],
-		["g_flow_max", "Mobility (Flow) Max", 0.0, 1.0, 0.05],
+		["g_viscosity_min", "Viscosity Min", 0.0, 1.0, 0.05],
+		["g_viscosity_max", "Viscosity Max", 0.0, 1.0, 0.05],
+		["g_mobility_min", "Mobility Min", 0.0, 1.0, 0.05],
+		["g_mobility_max", "Mobility Max", 0.0, 1.0, 0.05],
 		["g_affinity_min", "Cohesion (Affinity) Min", 0.0, 1.0, 0.05],
 		["g_affinity_max", "Cohesion (Affinity) Max", 0.0, 1.0, 0.05],
-		["g_lambda_min", "DensityTol (Lambda) Min", 0.0, 1.0, 0.05],
-		["g_lambda_max", "DensityTol (Lambda) Max", 0.0, 1.0, 0.05],
+		["g_density_tol_min", "Density Tolerance Min", 0.0, 1.0, 0.05],
+		["g_density_tol_max", "Density Tolerance Max", 0.0, 1.0, 0.05],
 		["g_secretion_min", "Secretion Min", 0.0, 1.0, 0.05],
 		["g_secretion_max", "Secretion Max", 0.0, 1.0, 0.05],
-		["g_perception_min", "Sensus (Perception) Min", 0.0, 1.0, 0.05],
-		["g_perception_max", "Sensus (Perception) Max", 0.0, 1.0, 0.05]
+		["g_sensitivity_min", "Sensitivity Min", 0.0, 1.0, 0.05],
+		["g_sensitivity_max", "Sensitivity Max", 0.0, 1.0, 0.05]
 	]
 }
 
@@ -57,9 +60,7 @@ var stats_labels = {}
 
 func _ready():
 	_build_ui()
-	sim.reset_simulation()
-	sim.reset_simulation()
-	sim.reset_simulation()
+	sim.reset_simulation() # Reset to apply new genes
 	sim.stats_updated.connect(_on_stats_updated)
 	sim.species_hovered.connect(_on_species_hovered)
 
@@ -115,6 +116,7 @@ func _build_ui():
 		"temperature": "Physics temperature. Controls the rate of diffusion/advection in the flow simulation.",
 		"theta_A": "Critical Mass (Alpha). The density threshold where repulsion forces begin to dominate.",
 		"alpha_n": "Repulsion Sharpness. Controls how abruptly the repulsion force kicks in.",
+		"flow_speed": "Advection Strength Multiplier. Increases flow force without changing time step (dt).",
 		"signal_diff": "Diffusion Rate. How fast the chemical signal spreads to neighboring cells.",
 		"signal_decay": "Decay Rate. How fast the chemical signal dissipates over time.",
 		"signal_advect": "Advection Weight. How much the chemical signal is dragged by the mass flow.",
@@ -127,16 +129,16 @@ func _build_ui():
 		"g_sigma_max": "Stability (Sigma) Maximum.",
 		"g_radius_min": "Effect Radius Minimum. Relative size of the creature's influence.",
 		"g_radius_max": "Effect Radius Maximum.",
-		"g_flow_min": "Mobility (Flow) Minimum. How fast the creature can move/flow.",
-		"g_flow_max": "Mobility (Flow) Maximum.",
+		"g_mobility_min": "Mobility (Flow) Minimum. How fast the creature can move/flow.",
+		"g_mobility_max": "Mobility (Flow) Maximum.",
 		"g_affinity_min": "Cohesion (Affinity) Minimum. Attraction strength to own species.",
 		"g_affinity_max": "Cohesion (Affinity) Maximum.",
-		"g_lambda_min": "Density Tolerance (Lambda) Minimum. Width of the growth function.",
-		"g_lambda_max": "Density Tolerance (Lambda) Maximum.",
+		"g_density_tol_min": "Density Tolerance (Lambda) Minimum. Width of the growth function.",
+		"g_density_tol_max": "Density Tolerance (Lambda) Maximum.",
 		"g_secretion_min": "Secretion Minimum. Amount of chemical signal produced.",
 		"g_secretion_max": "Secretion Maximum.",
-		"g_perception_min": "Sensus (Perception) Minimum. Sensitivity to the chemical signal.",
-		"g_perception_max": "Sensus (Perception) Maximum."
+		"g_sensitivity_min": "Sensitivity Minimum. Sensitivity to the chemical signal.",
+		"g_sensitivity_max": "Sensitivity Maximum."
 	}
 	
 	# Parameter sliders
@@ -166,6 +168,7 @@ func _build_ui():
 			
 			var val_label = Label.new()
 			var initial_val = sim.get_parameter(key)
+			if initial_val == null: initial_val = 0.0 # Fallback for new keys
 			val_label.text = str(initial_val).pad_decimals(3)
 			val_label.name = "Val_" + key
 			val_label.add_theme_font_size_override("font_size", 10)
@@ -265,14 +268,24 @@ func _on_species_hovered(info):
 			tooltip_panel.visible = true
 			var txt = "Species #%s: %s\n" % [str(info.get("id", "?")), info.get("name", "Unknown")]
 			txt += "Mass: %d\n" % int(info.get("mass", 0) * 1000)
-			txt += "Archetype: %.2f\n" % info.get("mu", 0.0)
-			txt += "Stability: %.2f\n" % info.get("sigma", 0.0)
-			txt += "Effect Radius: %.2f\n" % info.get("radius", 0.0)
-			txt += "Mobility: %.2f\n" % info.get("flow", 0.0)
-			txt += "Cohesion: %.2f\n" % info.get("affinity", 0.0)
-			txt += "DensityTol: %.2f\n" % info.get("density_tol", 0.0)
-			txt += "Secretion: %.2f\n" % info.get("secretion", 0.0)
-			txt += "Sensus: %.2f" % info.get("perception", 0.0)
+			
+			# Detailed 16-Gene Breakdown
+			txt += "[Physiology]\n"
+			txt += "  Archetype (Mu): %.2f\n" % info.get("mu", 0.0)
+			txt += "  Stability (Sigma): %.2f\n" % info.get("sigma", 0.0)
+			txt += "  Radius: %.2f | Visc: %.2f\n" % [info.get("radius", 0.0), info.get("viscosity", 0.0)]
+			
+			txt += "[Morphology]\n"
+			txt += "  Shape A/B/C: %.2f / %.2f / %.2f\n" % [info.get("shape_a", 0.0), info.get("shape_b", 0.0), info.get("shape_c", 0.0)]
+			txt += "  Growth: %.2f\n" % info.get("growth_rate", 0.0)
+			
+			txt += "[Behavior]\n"
+			txt += "  Aff: %.2f | Rep: %.2f\n" % [info.get("affinity", 0.0), info.get("repulsion", 0.0)]
+			txt += "  Mob: %.2f | Tol: %.2f\n" % [info.get("mobility", 0.0), info.get("density_tol", 0.0)]
+			
+			txt += "[Senses]\n"
+			txt += "  Sec: %.2f | Sens: %.2f\n" % [info.get("secretion", 0.0), info.get("sensitivity", 0.0)]
+			txt += "  Hue Emit/Det: %.2f / %.2f" % [info.get("emission_hue", 0.0), info.get("detection_hue", 0.0)]
 			
 			if tooltip_label:
 				tooltip_label.text = txt

@@ -1,41 +1,44 @@
-#[compute]
 #version 450
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(set = 0, binding = 0, std430) buffer Params {
+    // 0. Globals
     vec2 u_res;
     float u_dt;
     float u_seed;
     float u_R;
-    float u_theta_A; // Previously _pad1
-    float u_alpha_n; // Previously _pad2
-    float u_temperature; // Temperature (s)
-    float u_signal_advect; // Signal advection weight
-    float u_beta; // Selection pressure for negotiation rule
+    float u_theta_A;
+    float u_alpha_n;
+    float u_temperature;
+    float u_signal_advect;
+    float u_beta;
+    float u_signal_diff;
+    float u_signal_decay;
+    float u_flow_speed;
     float u_init_clusters;
     float u_init_density;
     float u_colonize_thr;
-    vec2 u_range_mu;
-    vec2 u_range_sigma;
-    vec2 u_range_radius;
-    vec2 u_range_flow;
-    vec2 u_range_affinity;
-    vec2 u_range_lambda;
-    float u_signal_diff;
-    float u_signal_decay;
-    vec2 u_range_secretion;
-    vec2 u_range_perception;
-    float _pad_end;
+    
+    // 1. Gene Ranges (16 Genes * 2) = 32 floats
+    // Block A: Physiology
+    vec2 r_mu; vec2 r_sigma; vec2 r_radius; vec2 r_viscosity;
+    // Block B: Morphology
+    vec2 r_shape_a; vec2 r_shape_b; vec2 r_shape_c; vec2 r_growth_rate;
+    // Block C: Social / Motor
+    vec2 r_affinity; vec2 r_repulsion; vec2 r_density_tol; vec2 r_mobility;
+    // Block D: Senses
+    vec2 r_secretion; vec2 r_sensitivity; vec2 r_emission_hue; vec2 r_detection_hue;
 } p;
 
 layout(set = 0, binding = 1) uniform sampler2D tex_state;
-layout(set = 0, binding = 2) uniform sampler2D tex_genome;
+layout(set = 0, binding = 2) uniform sampler2D tex_genome;     // Genes 1-8
 layout(set = 0, binding = 3) uniform sampler2D tex_signal;
 layout(set = 0, binding = 4, rgba32f) uniform image2D img_potential;
+layout(set = 0, binding = 5) uniform sampler2D tex_genome_ext; // Genes 9-16 [NEW]
 
 vec2 unpack2(float packed) {
-    uint bits = floatBitsToUint(packed) & ~0x40000000u; // Clear the forced normalization bit
+    uint bits = floatBitsToUint(packed) & ~0x40000000u; // Clear normalized bit
     float a = float((bits >> 15u) & 0x7FFFu) / 32767.0;
     float b = float(bits & 0x7FFFu) / 32767.0;
     return vec2(a, b);
@@ -46,40 +49,40 @@ float gaussian(float x, float mu, float sigma) {
     return exp(-0.5 * d * d);
 }
 
-// Mexican Hat Kernel (Negative Weights Enabled)
-// Paper Eq 1: K(x) = Σ_j b_j * exp(-0.5 * ((x/(r*R) - a_j)/w_j)²)
-float kernel(float r, vec4 genome_rg, vec4 genome_ba) {
-    // Unpack kernel genes
-    vec2 b1b2 = unpack2(genome_rg.r);
-    vec2 b3a2 = unpack2(genome_rg.g);
-    vec2 width_radius = unpack2(genome_rg.b);
+// Dynamic Kernel Generation based on Abstract Shape Genes
+float kernel(float r, float R_actual, vec4 genome_1) {
+    // Unpack Morphology Genes
+    // R: Mu, Sigma
+    // G: Radius, Viscosity
+    // B: Shape A, Shape B
+    // A: Shape C, Growth Rate
     
-    float b1_weight = b1b2.x;
-    float b2_weight = b1b2.y;
-    float b3_weight = b3a2.x;
-    float a2_pos = b3a2.y;
-    float kernel_width = width_radius.x;
-    float kernel_radius = width_radius.y;
+    vec2 shape_ab = unpack2(genome_1.b);
+    vec2 shape_c_gr = unpack2(genome_1.a);
     
-    // Map genes to kernel parameters
+    float shape_a = shape_ab.x; // Ring Balance (Inner vs Outer)
+    float shape_b = shape_ab.y; // Complexity / Texture
+    float shape_c = shape_c_gr.x; // Ring Spacing / Position
     
-    // OFFICIAL FLOW LENIA: b weights are POSITIVE ONLY [0.001, 1.0]
-    float b1 = 0.001 + b1_weight * 0.999;
-    float b2 = 0.001 + b2_weight * 0.999; 
-    float b3 = 0.001 + b3_weight * 0.999;
+    // Map Abstract Shape -> Concrete Kernel Weights (b1, b2, b3)
+    // Shape A (0-1): 0 = Outer Ring Dominant, 1 = Inner Ring Dominant
+    float b1 = 0.1 + shape_a * 0.9;
+    float b3 = 0.1 + (1.0 - shape_a) * 0.9;
     
+    // Shape B (0-1): Modulates the middle ring (b2)
+    float b2 = shape_b;
+    
+    // Fixed positions for standard Lenia life
     float a1 = 0.15;
-    float a2 = 0.3 + a2_pos * 0.4;
+    float a2 = 0.35 + shape_c * 0.3; // Shape C modulates middle ring position
     float a3 = 0.85;
     
-    // Widths
-    float width_scale = 0.04 + kernel_width * 0.12;
-    float w1 = width_scale;
-    float w2 = width_scale * 1.2;
-    float w3 = width_scale * 0.8;
+    // Widths (Standardized for stability)
+    float w1 = 0.15;
+    float w2 = 0.20;
+    float w3 = 0.15;
     
-    float r_scale = 0.5 + kernel_radius;
-    float R_actual = p.u_R * r_scale;
+    // Normalize distance by Species Radius
     float norm_r = r / R_actual;
     if (norm_r > 1.0) return 0.0;
     
@@ -88,15 +91,13 @@ float kernel(float r, vec4 genome_rg, vec4 genome_ba) {
     float k2 = b2 * gaussian(norm_r, a2, w2);
     float k3 = b3 * gaussian(norm_r, a3, w3);
     
-    return k1 + k2 + k3; // Raw kernel value, will be normalized by sum in loop
+    return k1 + k2 + k3;
 }
 
-// Convert hue [0,1] to RGB using HSV with S=1, V=1
 vec3 HueToRGB(float hue) {
     float h = hue * 6.0;
-    float c = 1.0;  // Chroma (S*V = 1*1)
+    float c = 1.0;
     float x = c * (1.0 - abs(mod(h, 2.0) - 1.0));
-    
     vec3 rgb;
     if (h < 1.0)      rgb = vec3(c, x, 0.0);
     else if (h < 2.0) rgb = vec3(x, c, 0.0);
@@ -104,7 +105,6 @@ vec3 HueToRGB(float hue) {
     else if (h < 4.0) rgb = vec3(0.0, x, c);
     else if (h < 5.0) rgb = vec3(x, 0.0, c);
     else              rgb = vec3(c, 0.0, x);
-    
     return rgb;
 }
 
@@ -115,103 +115,69 @@ void main() {
     vec2 uv = (vec2(uv_i) + 0.5) / p.u_res;
     ivec2 res_i = ivec2(p.u_res);
     
-    // Genome Unpacking (8 Genes from genome texture)
-    vec4 g_tex = texture(tex_genome, uv);
-    vec2 mu_sigma = unpack2(g_tex.r);
+    // 1. Read Genome 1 (Physiology/Morphology)
+    vec4 g1 = texture(tex_genome, uv);
+    
+    // 2. Read Genome 2 (Behavior/Senses)
+    vec4 g2 = texture(tex_genome_ext, uv);
+    
+    // Unpack Key Genes
+    vec2 mu_sigma = unpack2(g1.r);
     float g_mu = mu_sigma.x;
     float g_sigma = mu_sigma.y;
     
-    vec2 radius_flow = unpack2(g_tex.g);
-    float g_radius = radius_flow.x;
+    vec2 rad_visc = unpack2(g1.g);
+    float g_radius = rad_visc.x; // [0-1] relative to p.u_R? No, absolute multiplier?
+    // Init maps it to u_range_radius. Let's assume that range is e.g. [0.5, 2.0]
+    // So R_actual = p.u_R * g_radius
     
-    vec2 affinity_lambda = unpack2(g_tex.b);
-    float g_affinity = affinity_lambda.x;
+    vec2 hue_hue = unpack2(g2.a);
+    float g_detection_hue = hue_hue.y;
     
-    // Read Spectral Genes from state.a
-    vec4 state = texture(tex_state, uv);
-    vec2 spectral_genes = unpack2(state.a);
-    float g_detection_hue = spectral_genes.y;  // Hue this species seeks
-    
-    // === SPECTRAL SIGNAL DETECTION ===
+    // === SPECTRAL SIGNAL ===
     vec3 myDetector = HueToRGB(g_detection_hue);
-    
-    // Read local signal and compute similarity
     vec3 signalVec = texture(tex_signal, uv).rgb;
-    float U_signal = dot(signalVec, myDetector);  // Spectral similarity [-1, 1] -> [0, 3] for pure colors
+    float U_signal = dot(signalVec, myDetector); 
     
-    // Compute signal gradient using central differences
-    ivec2 l_uv = (uv_i + ivec2(-1, 0) + res_i) % res_i;
-    ivec2 r_uv = (uv_i + ivec2(1, 0) + res_i) % res_i;
-    ivec2 u_uv = (uv_i + ivec2(0, -1) + res_i) % res_i;
-    ivec2 d_uv = (uv_i + ivec2(0, 1) + res_i) % res_i;
+    // === CONVOLUTION ===
+    // Dynamic Radius!
+    float R_actual = max(p.u_R * g_radius, 1.0);
+    int maxR = int(R_actual) + 1; // Conservative bound
     
-    vec3 sL = texelFetch(tex_signal, l_uv, 0).rgb;
-    vec3 sR = texelFetch(tex_signal, r_uv, 0).rgb;
-    vec3 sU = texelFetch(tex_signal, u_uv, 0).rgb;
-    vec3 sD = texelFetch(tex_signal, d_uv, 0).rgb;
-    
-    // Gradient of spectral similarity
-    float simL = dot(sL, myDetector);
-    float simR = dot(sR, myDetector);
-    float simU = dot(sU, myDetector);
-    float simD = dot(sD, myDetector);
-    vec2 gradSignal = vec2(simR - simL, simD - simU);
-    
-    // === MASS CONVOLUTION (U_growth) ===
-    float R_max = p.u_R * 1.6;
-    int maxR = int(R_max) + 1;
+    // Optimization: Hard cap maxR to prevent massive loops if genes go wild
+    maxR = min(maxR, 60); 
     
     float sum = 0.0;
-    float totalWeight = 0.0; // Restoring normalization accumulator
-    vec2 weightedGradient = vec2(0.0);
+    float totalWeight = 0.0;
     
     for (int dy = -maxR; dy <= maxR; dy++) {
         for (int dx = -maxR; dx <= maxR; dx++) {
             vec2 offset = vec2(float(dx), float(dy));
             float r = length(offset);
             
-            float w = kernel(r, g_tex, g_tex);
-            if (w > 0.0001) { // Positive weights only now
-                // Precise Integer Sampling
+            // Pass R_actual to kernel so it normalizes correctly [0,1] inside the species radius
+            float w = kernel(r, R_actual, g1);
+            
+            if (w > 0.0001) {
                 ivec2 neighbor_coord = (uv_i + ivec2(dx, dy) + res_i) % res_i;
                 float neighborMass = texelFetch(tex_state, neighbor_coord, 0).r;
                 
                 sum += neighborMass * w;
-                totalWeight += w; // Accumulate spatial weight
-                
-                if (r > 0.0) {
-                    vec2 dir = offset / r;
-                    weightedGradient += dir * neighborMass * w;
-                }
+                totalWeight += w;
             }
         }
     }
     
-    // Step 1: Compute convolution K*A (NORMALIZED by spatial sum)
-    // This matches: nK = K / sum(K) in official code
     float U_raw = (totalWeight > 0.0) ? sum / totalWeight : 0.0;
     
-    // Step 2: Apply Growth Function G(U)
-    // Read growth genes
-    vec2 growth_genes = unpack2(g_tex.a);
-    float growth_mu = growth_genes.x;
-    float growth_sigma = growth_genes.y;
-    
-    // Restore Lenia ranges (U is normalized [0,1])
-    float mu = growth_mu; // Use direct [0,1] from initialization (mapped by UI)
-    float sigma = 0.001 + growth_sigma * 0.199; // Keep sigma scaled [0, 0.2] for stability
+    // === GROWTH G(U) ===
+    // Use Species Specific Mu and Sigma
+    float mu = g_mu; 
+    float sigma = 0.001 + g_sigma * 0.2; // Scaling for stability
     
     float diff = (U_raw - mu);
     float exp_term = exp(-0.5 * (diff * diff) / max(sigma * sigma, 0.0001));
-    float U_growth = 2.0 * exp_term - 1.0;  // Range: [-1, 1]
+    float U_growth = 2.0 * exp_term - 1.0; 
     
-    // Normalize gradient relative to kernel strength
-    vec2 gradU_growth = (totalWeight > 0.0) ? weightedGradient / totalWeight : vec2(0.0);
-    
-    // === OUTPUT ===
-    // R: U_growth (for growth function G(U))
-    // GB: gradU_growth (mass gradient for flow)
-    // A: U_signal (spectral similarity for chemotaxis)
-    // Note: gradSignal will be computed in flow shader from neighbors' U_signal values
-    imageStore(img_potential, uv_i, vec4(U_growth, gradU_growth, U_signal));
+    imageStore(img_potential, uv_i, vec4(U_growth, 0.0, 0.0, U_signal));
 }

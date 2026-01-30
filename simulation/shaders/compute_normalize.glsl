@@ -83,12 +83,12 @@ void main() {
     imageStore(img_mass_accum, uv_i, uvec4(0)); // Reset
     float mass = float(m_uint) / MASS_SCALE;
     
-    // 2. Read preserved Velocity
-    // We read from OLD state
-    vec2 uv_c = (vec2(uv_i) + 0.5) / p.u_res;
-    vec4 oldState = texture(tex_old_state, uv_c);
-    vec2 velocity = oldState.gb; 
-    velocity *= 0.0; // Reset velocity (Flow Lenia typically rebuilds it)
+    // 2. Retrieve Velocity calculated by Flow Shader
+    // We stored it in img_new_state.gb in the previous pass
+    vec4 flowData = imageLoad(img_new_state, uv_i);
+    vec2 velocity = flowData.gb; 
+    
+    // Optional: Smooth or Damping could happen here, but we keep it raw for now.
     
     vec2 px = 1.0 / p.u_res;
     vec2 uv = (vec2(uv_i) + 0.5) * px;

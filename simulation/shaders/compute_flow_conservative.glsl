@@ -109,7 +109,10 @@ void main() {
     vec4 state = texture(tex_state, uv);
     float myMass = state.r;
     
-    if (myMass < 0.0001) return; // Optimization: Skip empty space (Atomic adds are expensive)
+    if (myMass < 0.0001) {
+        imageStore(img_new_state, uv_i, vec4(0.0));
+        return; 
+    }
 
     // === 1. Unpack Genes ===
     vec4 g1 = texture(tex_genome, uv);
@@ -269,4 +272,9 @@ void main() {
         if (m01 > 0) imageAtomicMax(img_winner_tracker, c01, (m01 << 20u) | src_idx);
         if (m11 > 0) imageAtomicMax(img_winner_tracker, c11, (m11 << 20u) | src_idx);
     }
+    
+    // Store calculated velocity (source, instantaneous) into the G/B channels of the destination state
+    // This allows compute_normalize to pick it up and preserve it for the next frame's signal advection.
+    // We store it in .gb to match the standard format (Mass, VelX, VelY, Aux)
+    imageStore(img_new_state, uv_i, vec4(0.0, vel.x, vel.y, 0.0));
 }

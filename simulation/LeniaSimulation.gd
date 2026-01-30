@@ -211,36 +211,38 @@ func _process(_delta):
 
 func _update_ubo():
 	# UBO layout: Must be carefully aligned to vec4 (16 bytes)
-	# Total Floats: ~20 globals + 32 gene ranges = 52+
+	# Matches std430 layout in shaders (Params block)
+	# Total Floats: 16 (Globals) + 32 (Gene Ranges) = 48 floats
 	var buffer = PackedFloat32Array([
-		# 0. Global Params (Vec4 aligned chunks)
+		# Chunk 0 (0-16 bytes): Vec2 res + float dt + float seed
 		params["res_x"], params["res_y"], params["dt"], params["seed"],
 		
-		# 1. Physics Globals
+		# Chunk 1 (16-32 bytes): R, Theta, Alpha, Temp
 		params["R"], params["theta_A"], params["alpha_n"], params["temperature"],
+		
+		# Chunk 2 (32-48 bytes): Signal Props + Beta
 		params["signal_advect"], params["beta_selection"], params["signal_diff"], params["signal_decay"],
+		
+		# Chunk 3 (48-64 bytes): Flow + Init Props
 		params["flow_speed"], params["init_clusters"], params["init_density"], params["colonize_thr"],
 		
 		# 2. Gene Ranges (16 Genes * 2 values = 32 floats)
-		# Block A: Physiology
+		# Block A: Physiology (4 Genes)
 		params["g_mu_min"], params["g_mu_max"], params["g_sigma_min"], params["g_sigma_max"],
 		params["g_radius_min"], params["g_radius_max"], params["g_viscosity_min"], params["g_viscosity_max"],
 		
-		# Block B: Morphology
+		# Block B: Morphology (4 Genes)
 		params["g_shape_a_min"], params["g_shape_a_max"], params["g_shape_b_min"], params["g_shape_b_max"],
 		params["g_shape_c_min"], params["g_shape_c_max"], params["g_growth_rate_min"], params["g_growth_rate_max"],
 		
-		# Block C: Social / Motor
+		# Block C: Social / Motor (4 Genes)
 		params["g_affinity_min"], params["g_affinity_max"], params["g_repulsion_min"], params["g_repulsion_max"],
 		params["g_density_tol_min"], params["g_density_tol_max"], params["g_mobility_min"], params["g_mobility_max"],
 		
-		# Block D: Senses
+		# Block D: Senses (4 Genes)
 		params["g_secretion_min"], params["g_secretion_max"], params["g_sensitivity_min"], params["g_sensitivity_max"],
 		params["g_emission_hue_min"], params["g_emission_hue_max"], params["g_detection_hue_min"], params["g_detection_hue_max"]
 	])
-	
-	# Pad to multiple of 16 bytes (4 floats)
-	# Current size: 4 + 12 + 32 = 48 floats. Perfectly aligned!
 	
 	var bytes = buffer.to_byte_array()
 	rd.buffer_update(ubo, 0, bytes.size(), bytes)

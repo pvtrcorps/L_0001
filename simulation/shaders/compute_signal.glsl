@@ -4,30 +4,32 @@
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(set = 0, binding = 0, std430) buffer Params {
+    // 0. Globals
     vec2 u_res;
     float u_dt;
     float u_seed;
     float u_R;
-    float u_theta_A; 
-    float u_alpha_n; 
+    float u_theta_A;
+    float u_alpha_n;
     float u_temperature;
-    float u_signal_advect;  // NEW: Signal advection weight [0-1]
+    float u_signal_advect;
     float u_beta;
-    float _pad5;
+    float u_signal_diff;
+    float u_signal_decay;
+    float u_flow_speed;
     float u_init_clusters;
     float u_init_density;
     float u_colonize_thr;
-    vec2 u_range_mu;
-    vec2 u_range_sigma;
-    vec2 u_range_radius;
-    vec2 u_range_flow;
-    vec2 u_range_affinity;
-    vec2 u_range_lambda;
-    float u_signal_diff;
-    float u_signal_decay;
-    vec2 u_range_secretion;
-    vec2 u_range_perception;
-    float u_flow_speed; // Previously _pad_end
+    
+    // 1. Gene Ranges (16 Genes * 2) = 32 floats
+    // Block A: Physiology
+    vec2 r_mu; vec2 r_sigma; vec2 r_radius; vec2 r_viscosity;
+    // Block B: Morphology
+    vec2 r_shape_a; vec2 r_shape_b; vec2 r_shape_c; vec2 r_growth_rate;
+    // Block C: Social / Motor
+    vec2 r_affinity; vec2 r_repulsion; vec2 r_density_tol; vec2 r_mobility;
+    // Block D: Senses
+    vec2 r_secretion; vec2 r_sensitivity; vec2 r_emission_hue; vec2 r_detection_hue;
 } p;
 
 layout(set = 0, binding = 1) uniform sampler2D tex_signal_src;

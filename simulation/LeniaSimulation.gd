@@ -5,6 +5,8 @@ signal species_list_updated(species_list)
 signal species_hovered(info) # New signal
 # SpeciesTracker is a global class
 var tracker = SpeciesTracker.new()
+var camera: SimulationCamera
+
 
 
 # === GLOBAL SIMULATION PARAMETERS ===
@@ -14,32 +16,32 @@ var params = {
 	"dt": 0.1,
 	"seed": 0.0,
 	# Kernel shape (global - creates pattern types)
-	"R": 12.0,           # Kernel radius in pixels
+	"R": 8.0,           # Kernel radius in pixels
 
 	# Initialization
 	"init_clusters": 16.0,
-	"init_density": 0.5,   # Higher density for better start
+	"init_density": 1.0,   # Higher density for better start
 	
 	# Advanced Physics (Flow Lenia style)
 	"temperature": 0.65,   # Advection diffusion (s). Paper default: 0.65
 	"identity_thr": 0.2,   # Difference to be considered enemy (used in localized kernel if implemented)
 	"colonize_thr": 0.15,  # Mass needed to resist invasion
 	"theta_A": 1.0,        # Global Density Multiplier
-	"alpha_n": 3.0,        # Repulsion Sharpness
+	"alpha_n": 0.0,        # Repulsion Sharpness
 	
 	# Signal Layer
-	"signal_diff": 2.0,    # Diffusion Rate
+	"signal_diff": 1.0,    # Diffusion Rate
 	"signal_decay": 0.1,   # Decay Rate
-	"signal_advect": 0.2,  # Signal advection weight [0-1] (how much signals follow mass flow)
-	"flow_speed": 5.0,     # Multiplier for advection force (decopuled from dt)
+	"signal_advect": 1.0,  # Signal advection weight [0-1] (how much signals follow mass flow)
+	"flow_speed": 1.0,     # Multiplier for advection force (decopuled from dt)
 	
 	"beta_selection": 1.0, # Selection pressure for negotiation rule
 	
 	# === GENE RANGES (16 GENES x 2 MIN/MAX) ===
 	# BLOCK A: Physiology (Body)
-	"g_mu_min": 0.12, "g_mu_max": 0.18,      # 1. Growth Target Density
-	"g_sigma_min": 0.02, "g_sigma_max": 0.06,# 2. Growth Stability
-	"g_radius_min": 0.5, "g_radius_max": 1.0,# 3. Size (Scale)
+	"g_mu_min": 0.0, "g_mu_max": 1.0,      # 1. Growth Target Density
+	"g_sigma_min": 0.0, "g_sigma_max": 1.0,# 2. Growth Stability
+	"g_radius_min": 0.0, "g_radius_max": 1.0,# 3. Size (Scale)
 	"g_viscosity_min": 0.0, "g_viscosity_max": 1.0, # 4. Viscosity (Mass/Inertia)
 	
 	# BLOCK B: Morphology (Shape)
@@ -116,12 +118,12 @@ var analysis_frame_count := 0
 var last_analysis_bytes: PackedByteArray
 var last_species_list = []
 
-# Camera state
-var camera_pos := Vector2(0.0, 0.0)
-var camera_zoom := 1.0
-var is_dragging := false
-var is_inspecting := false # New: Track right-click state
-var last_mouse_pos := Vector2()
+# Camera state delegated to SimulationCamera
+# var camera_pos := Vector2(0.0, 0.0)
+# var camera_zoom := 1.0
+# var is_dragging := false
+# var is_inspecting := false # New: Track right-click state
+# var last_mouse_pos := Vector2()
 
 @export var display_material: ShaderMaterial
 
@@ -140,6 +142,12 @@ func _ready():
 	# Run Init once
 	_dispatch_init()
 	initialized = true
+	
+	# Setup Camera
+	camera = SimulationCamera.new()
+	add_child(camera)
+	camera.inspect_requested.connect(_on_camera_inspect)
+	
 	print("Parametric Lenia with Signaling initialized.")
 
 func _process(_delta):
@@ -205,8 +213,8 @@ func _process(_delta):
 		if texture_rd_genome_ext.texture_rd_rid != current_genome_ext:
 			texture_rd_genome_ext.texture_rd_rid = current_genome_ext
 			
-		display_material.set_shader_parameter("camera_pos", camera_pos)
-		display_material.set_shader_parameter("camera_zoom", camera_zoom)
+		display_material.set_shader_parameter("camera_pos", camera.camera_pos)
+		display_material.set_shader_parameter("camera_zoom", camera.camera_zoom)
 		display_material.set_shader_parameter("tex_genome_ext", texture_rd_genome_ext)
 
 func _update_ubo():
@@ -732,10 +740,7 @@ func _create_set_flow_conservative(src_state: RID, src_genome: RID, src_genome_e
 	u_new_state.binding = 5
 	u_new_state.add_id(dst_state)
 	
-	var u_new_genome = RDUniform.new()
-	u_new_genome.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
-	u_new_genome.binding = 6
-	u_new_genome.add_id(dst_genome)
+	# u_new_genome binding 6 removed (unused in shader)
 	
 	var u_sig = RDUniform.new()
 	u_sig.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
@@ -754,7 +759,7 @@ func _create_set_flow_conservative(src_state: RID, src_genome: RID, src_genome_e
 	u_genome_ext.add_id(sampler_nearest)
 	u_genome_ext.add_id(src_genome_ext)
 	
-	return rd.uniform_set_create([u_ubo, u_state, u_genome, u_pot, u_mass, u_new_state, u_new_genome, u_sig, u_winner, u_genome_ext], shader_flow_conservative, 0)
+	return rd.uniform_set_create([u_ubo, u_state, u_genome, u_pot, u_mass, u_new_state, u_sig, u_winner, u_genome_ext], shader_flow_conservative, 0)
 
 
 func _create_set_normalize(src_mass: RID, src_pot: RID, old_state: RID, dst_state: RID, dst_sig: RID, src_winner: RID, dst_genome: RID, old_genome: RID, src_genome_ext: RID, dst_genome_ext: RID) -> RID:
@@ -905,52 +910,19 @@ func get_species_info_at(uv: Vector2) -> Dictionary:
 	info["name"] = dummy_species.name
 	return info
 
-# === INPUT HANDLING ===
+# === CAMERA CALLBACKS ===
 
-func _input(event):
-	if event is InputEventMouseButton:
-		if event.button_index == MOUSE_BUTTON_MIDDLE:
-			is_dragging = event.pressed
-			last_mouse_pos = event.position
-		elif event.button_index == MOUSE_BUTTON_WHEEL_UP:
-			camera_zoom = min(camera_zoom * 1.1, 20.0)
-		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			camera_zoom = max(camera_zoom * 0.9, 0.1)
-		elif event.button_index == MOUSE_BUTTON_RIGHT:
-			is_inspecting = event.pressed
-			if not is_inspecting:
-				# Clear highlight/tooltip when released
-				set_highlight_genes({}, false)
-				emit_signal("species_hovered", {})
-			
-	elif event is InputEventMouseMotion:
-		if is_dragging:
-			var viewport_size = get_viewport().get_visible_rect().size
-			var delta = (event.position - last_mouse_pos) / viewport_size.y
-			camera_pos -= delta / camera_zoom
-			last_mouse_pos = event.position
-		elif is_inspecting:
-			# Hover Logic (Only if right-clicking)
-			var viewport_size = get_viewport().get_visible_rect().size
-			var aspect = viewport_size.x / viewport_size.y
-			var uv = event.position / viewport_size
-			
-			# Match Shader Transform: Screen -> Texture
-			uv -= Vector2(0.5, 0.5)
-			
-			if aspect > 1.0:
-				uv.x *= aspect
-			else:
-				uv.y /= aspect
-				
-			uv /= camera_zoom
-			uv += camera_pos
-			uv += Vector2(0.5, 0.5)
-			
-			var info = get_species_info_at(uv)
-			if info.has("id"):
-				set_highlight_genes(info, true)
-				emit_signal("species_hovered", info)
-			else:
-				set_highlight_genes({}, false)
-				emit_signal("species_hovered", {})
+func _on_camera_inspect(uv: Vector2, active: bool):
+	if active:
+		var info = get_species_info_at(uv)
+		if info.has("id"):
+			set_highlight_genes(info, true)
+			emit_signal("species_hovered", info)
+		else:
+			set_highlight_genes({}, false)
+			emit_signal("species_hovered", {})
+	else:
+		set_highlight_genes({}, false)
+		emit_signal("species_hovered", {})
+
+# Input handling moved to SimulationCamera.gd

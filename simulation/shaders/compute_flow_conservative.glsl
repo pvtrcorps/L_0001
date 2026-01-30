@@ -37,7 +37,7 @@ layout(set = 0, binding = 2) uniform sampler2D tex_genome;      // Genes 1-8
 layout(set = 0, binding = 3) uniform sampler2D tex_potential;
 layout(set = 0, binding = 4, r32ui) uniform uimage2D img_mass_accum;
 layout(set = 0, binding = 5, rgba32f) uniform image2D img_new_state;
-layout(set = 0, binding = 6, rgba32f) uniform image2D img_new_genome; // Unused for advection?
+// binding 6 was img_new_genome, removed as unused
 layout(set = 0, binding = 7) uniform sampler2D tex_signal;
 layout(set = 0, binding = 8, r32ui) uniform uimage2D img_winner_tracker;
 layout(set = 0, binding = 9) uniform sampler2D tex_genome_ext;  // Genes 9-16 [NEW]

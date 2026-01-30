@@ -8,6 +8,8 @@
 shader = ExtResource("1_shader")
 shader_parameter/camera_pos = Vector2(0, 0)
 shader_parameter/camera_zoom = 1.0
+shader_parameter/u_show_select = false
+shader_parameter/u_select_vector = Vector4(0, 0, 0, 0)
 
 [node name="Main" type="Node"]
 script = ExtResource("3_main")

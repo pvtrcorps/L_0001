@@ -7,6 +7,24 @@ const CELL_FLOATS = 18 # Mass (1) + Genes (16) + Padding (1) = 18
 const MASS_THRESHOLD = 0.05
 const GENE_SIMILARITY_THRESHOLD = 0.25 # Slightly looser for high-D space
 
+# Gene Indices
+const G_MU = 0
+const G_SIGMA = 1
+const G_RADIUS = 2
+const G_VISCOSITY = 3
+const G_SHAPE_A = 4
+const G_SHAPE_B = 5
+const G_SHAPE_C = 6
+const G_GROWTH = 7
+const G_AFFINITY = 8
+const G_REPULSION = 9
+const G_DENSITY_TOL = 10
+const G_MOBILITY = 11
+const G_SECRETION = 12
+const G_SENSITIVITY = 13
+const G_EMIT_HUE = 14
+const G_DETECT_HUE = 15
+
 class Species:
 	var id: int
 	var mass: float = 0.0
@@ -32,25 +50,25 @@ class Species:
 		area += 1
 		mass += m
 		
-		genes_sum["mu"] += sample_genes[0]
-		genes_sum["sigma"] += sample_genes[1]
-		genes_sum["radius"] += sample_genes[2]
-		genes_sum["viscosity"] += sample_genes[3]
+		genes_sum["mu"] += sample_genes[G_MU]
+		genes_sum["sigma"] += sample_genes[G_SIGMA]
+		genes_sum["radius"] += sample_genes[G_RADIUS]
+		genes_sum["viscosity"] += sample_genes[G_VISCOSITY]
 		
-		genes_sum["shape_a"] += sample_genes[4]
-		genes_sum["shape_b"] += sample_genes[5]
-		genes_sum["shape_c"] += sample_genes[6]
-		genes_sum["growth_rate"] += sample_genes[7]
+		genes_sum["shape_a"] += sample_genes[G_SHAPE_A]
+		genes_sum["shape_b"] += sample_genes[G_SHAPE_B]
+		genes_sum["shape_c"] += sample_genes[G_SHAPE_C]
+		genes_sum["growth_rate"] += sample_genes[G_GROWTH]
 		
-		genes_sum["affinity"] += sample_genes[8]
-		genes_sum["repulsion"] += sample_genes[9]
-		genes_sum["density_tol"] += sample_genes[10]
-		genes_sum["mobility"] += sample_genes[11]
+		genes_sum["affinity"] += sample_genes[G_AFFINITY]
+		genes_sum["repulsion"] += sample_genes[G_REPULSION]
+		genes_sum["density_tol"] += sample_genes[G_DENSITY_TOL]
+		genes_sum["mobility"] += sample_genes[G_MOBILITY]
 		
-		genes_sum["secretion"] += sample_genes[12]
-		genes_sum["sensitivity"] += sample_genes[13]
-		genes_sum["emission_hue"] += sample_genes[14]
-		genes_sum["detection_hue"] += sample_genes[15]
+		genes_sum["secretion"] += sample_genes[G_SECRETION]
+		genes_sum["sensitivity"] += sample_genes[G_SENSITIVITY]
+		genes_sum["emission_hue"] += sample_genes[G_EMIT_HUE]
+		genes_sum["detection_hue"] += sample_genes[G_DETECT_HUE]
 		
 	func finalize():
 		if area == 0: return
@@ -104,18 +122,18 @@ class Species:
 static func get_fast_dist(g1: PackedFloat32Array, g2: PackedFloat32Array) -> float:
 	var d = 0.0
 	# Physiology (High weight)
-	d += abs(g1[0] - g2[0]) * 2.0 # mu
-	d += abs(g1[1] - g2[1]) * 1.5 # sigma
-	d += abs(g1[2] - g2[2]) * 1.0 # radius
-	d += abs(g1[3] - g2[3]) * 0.5 # viscosity
-	d += abs(g1[4] - g2[4]) * 0.8 # shape_a
-	d += abs(g1[8] - g2[8]) * 0.5 # affinity
-	d += abs(g1[11] - g2[11]) * 1.0 # mobility
+	d += abs(g1[G_MU] - g2[G_MU]) * 2.0 # mu
+	d += abs(g1[G_SIGMA] - g2[G_SIGMA]) * 1.5 # sigma
+	d += abs(g1[G_RADIUS] - g2[G_RADIUS]) * 1.0 # radius
+	d += abs(g1[G_VISCOSITY] - g2[G_VISCOSITY]) * 0.5 # viscosity
+	d += abs(g1[G_SHAPE_A] - g2[G_SHAPE_A]) * 0.8 # shape_a
+	d += abs(g1[G_AFFINITY] - g2[G_AFFINITY]) * 0.5 # affinity
+	d += abs(g1[G_MOBILITY] - g2[G_MOBILITY]) * 1.0 # mobility
 	
 	# Emission Hue (Critical for speciation)
 	# Handle circular distance for hue? [0,1]
 	# Simple diff for now
-	var hue_diff = abs(g1[14] - g2[14])
+	var hue_diff = abs(g1[G_EMIT_HUE] - g2[G_EMIT_HUE])
 	if hue_diff > 0.5: hue_diff = 1.0 - hue_diff
 	d += hue_diff * 2.0
 	

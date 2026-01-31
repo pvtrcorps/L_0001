@@ -158,7 +158,7 @@ func _ready():
 	print("Parametric Lenia with Signaling initialized.")
 
 func _process(_delta):
-	if not initialized: return
+	if not initialized or rd == null: return
 	
 	# Update random seed
 	params["seed"] = randf() * 1000.0
@@ -867,6 +867,90 @@ func clear_simulation():
 	rd.texture_clear(tex_signal_a, Color(0,0,0,0), 0, 1, 0, 1)
 	rd.texture_clear(tex_signal_b, Color(0,0,0,0), 0, 1, 0, 1)
 	# rd.barrier(RenderingDevice.BARRIER_MASK_COMPUTE) # barrier automatically inserted
+
+func change_resolution(w: float, h: float):
+	if w == params["res_x"] and h == params["res_y"]:
+		return
+		
+	print("Changing resolution to %dx%d..." % [w, h])
+	initialized = false
+	paused = true
+	
+	# Wait for device to be idle before freeing
+	rd.free_rid(pipeline_init)
+	rd.free_rid(pipeline_conv)
+	rd.free_rid(pipeline_stats)
+	rd.free_rid(pipeline_analysis)
+	rd.free_rid(pipeline_flow_conservative)
+	rd.free_rid(pipeline_normalize)
+	rd.free_rid(pipeline_signal)
+	
+	_free_resources()
+	
+	params["res_x"] = w
+	params["res_y"] = h
+	
+	# Re-compile pipelines (shaders persist)
+	pipeline_init = rd.compute_pipeline_create(shader_init)
+	pipeline_conv = rd.compute_pipeline_create(shader_conv)
+	pipeline_stats = rd.compute_pipeline_create(shader_stats)
+	pipeline_analysis = rd.compute_pipeline_create(shader_analysis)
+	pipeline_flow_conservative = rd.compute_pipeline_create(shader_flow_conservative)
+	pipeline_normalize = rd.compute_pipeline_create(shader_normalize)
+	pipeline_signal = rd.compute_pipeline_create(shader_signal)
+	
+	_create_textures()
+	# Uniforms depend on texture RIDs, so recreate them?
+	# Wait, _create_uniforms creates UBO/SSBO which are fixed size mostly,
+	# BUT stats and analysis buffers depend on resolution!
+	_create_uniforms() 
+	
+	# Reset Cache
+	set_cache.clear()
+	
+	# Update camera limits? 
+	# Camera doesn't have hard limits currently, just zoom.
+	
+	# Initialize
+	_dispatch_init()
+	initialized = true
+	paused = false
+	print("Resolution changed.")
+
+func _free_resources():
+	# Free Textures
+	if tex_state_a.is_valid(): rd.free_rid(tex_state_a)
+	if tex_state_b.is_valid(): rd.free_rid(tex_state_b)
+	if tex_genome_a.is_valid(): rd.free_rid(tex_genome_a)
+	if tex_genome_b.is_valid(): rd.free_rid(tex_genome_b)
+	if tex_genome_ext_a.is_valid(): rd.free_rid(tex_genome_ext_a)
+	if tex_genome_ext_b.is_valid(): rd.free_rid(tex_genome_ext_b)
+	if tex_signal_a.is_valid(): rd.free_rid(tex_signal_a)
+	if tex_signal_b.is_valid(): rd.free_rid(tex_signal_b)
+	if tex_potential.is_valid(): rd.free_rid(tex_potential)
+	if tex_mass_accum.is_valid(): rd.free_rid(tex_mass_accum)
+	if tex_winner_tracker.is_valid(): rd.free_rid(tex_winner_tracker)
+	
+	# Free Buffers
+	if ubo.is_valid(): rd.free_rid(ubo)
+	if stats_buffer.is_valid(): rd.free_rid(stats_buffer)
+	if analysis_buffer.is_valid(): rd.free_rid(analysis_buffer)
+	
+	# Invalidate RIDs
+	tex_state_a = RID()
+	tex_state_b = RID()
+	tex_genome_a = RID()
+	tex_genome_b = RID()
+	tex_genome_ext_a = RID()
+	tex_genome_ext_b = RID()
+	tex_signal_a = RID()
+	tex_signal_b = RID()
+	tex_potential = RID()
+	tex_mass_accum = RID()
+	tex_winner_tracker = RID()
+	ubo = RID()
+	stats_buffer = RID()
+	analysis_buffer = RID()
 
 func set_parameter(param_name: String, value: float):
 	if params.has(param_name):

@@ -252,10 +252,11 @@ void main() {
         imageAtomicAdd(img_mass_accum, c11, uint(float(amount) * w11));
         
         // WINNER TRACKING (For Genome Inheritance)
-        // We pack (Mass Contribution << 20) | (Source Index)
+        // We pack (Mass Contribution << 24) | (Source Index)
+        // 8-bit Score (0-255) + 24-bit Index (0-16.7M) -> Supports 4096*4096
         
         uint src_idx = uint(uv_i.y) * uint(p.u_res.x) + uint(uv_i.x);
-        src_idx = src_idx & 0xFFFFFu; 
+        src_idx = src_idx & 0xFFFFFFu; 
         
         // "No Mass Without Representation"
         // If we send mass (weighted amount > 0), we MUST register at least 1 unit of claim.
@@ -270,18 +271,18 @@ void main() {
         uint a11 = uint(float(amount) * w11);
         
         // Calculate tracker score (still scaled for competition), but floor clamped to 1 if mass exists.
-        // Scale 2000.0 is arbitrary, just needs to be consistent.
-        // If a00 > 0 (Mass added), then m00 MUST be >= 1.
+        // Scale reduced to fit 8-bit (255 max). 
+        // With scale 1000.0, 0.25 mass -> 250 score.
         
-        uint m00 = (a00 > 0) ? max(1u, uint(clamp(myMass * w00 * 2000.0, 0.0, 4095.0))) : 0u;
-        uint m10 = (a10 > 0) ? max(1u, uint(clamp(myMass * w10 * 2000.0, 0.0, 4095.0))) : 0u;
-        uint m01 = (a01 > 0) ? max(1u, uint(clamp(myMass * w01 * 2000.0, 0.0, 4095.0))) : 0u;
-        uint m11 = (a11 > 0) ? max(1u, uint(clamp(myMass * w11 * 2000.0, 0.0, 4095.0))) : 0u;
+        uint m00 = (a00 > 0) ? max(1u, uint(clamp(myMass * w00 * 1000.0, 0.0, 255.0))) : 0u;
+        uint m10 = (a10 > 0) ? max(1u, uint(clamp(myMass * w10 * 1000.0, 0.0, 255.0))) : 0u;
+        uint m01 = (a01 > 0) ? max(1u, uint(clamp(myMass * w01 * 1000.0, 0.0, 255.0))) : 0u;
+        uint m11 = (a11 > 0) ? max(1u, uint(clamp(myMass * w11 * 1000.0, 0.0, 255.0))) : 0u;
         
-        if (m00 > 0) imageAtomicMax(img_winner_tracker, c00, (m00 << 20u) | src_idx);
-        if (m10 > 0) imageAtomicMax(img_winner_tracker, c10, (m10 << 20u) | src_idx);
-        if (m01 > 0) imageAtomicMax(img_winner_tracker, c01, (m01 << 20u) | src_idx);
-        if (m11 > 0) imageAtomicMax(img_winner_tracker, c11, (m11 << 20u) | src_idx);
+        if (m00 > 0) imageAtomicMax(img_winner_tracker, c00, (m00 << 24u) | src_idx);
+        if (m10 > 0) imageAtomicMax(img_winner_tracker, c10, (m10 << 24u) | src_idx);
+        if (m01 > 0) imageAtomicMax(img_winner_tracker, c01, (m01 << 24u) | src_idx);
+        if (m11 > 0) imageAtomicMax(img_winner_tracker, c11, (m11 << 24u) | src_idx);
     }
     
     // Store calculated velocity (source, instantaneous) into the G/B channels of the destination state

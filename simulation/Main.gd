@@ -229,6 +229,34 @@ func _build_ui():
 	btn_clear.tooltip_text = "Clear the simulation grid (remove all life)."
 	btn_clear.pressed.connect(func(): sim.clear_simulation())
 	ui_container.add_child(btn_clear)
+	
+	# Resolution Selector
+	ui_container.add_child(HSeparator.new())
+	var res_hbox = HBoxContainer.new()
+	var res_lbl = Label.new()
+	res_lbl.text = "Resolution:"
+	res_lbl.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	res_hbox.add_child(res_lbl)
+	
+	var res_opt = OptionButton.new()
+	res_opt.add_item("1024 x 1024", 0)
+	res_opt.add_item("2048 x 2048", 1)
+	res_opt.add_item("4096 x 4096", 2)
+	
+	# Set default selection based on current param
+	var curr_res = int(sim.params["res_x"])
+	if curr_res == 2048: res_opt.selected = 1
+	elif curr_res == 4096: res_opt.selected = 2
+	else: res_opt.selected = 0
+	
+	res_opt.item_selected.connect(func(idx):
+		var size = 1024.0
+		if idx == 1: size = 2048.0
+		elif idx == 2: size = 4096.0
+		sim.change_resolution(size, size)
+	)
+	res_hbox.add_child(res_opt)
+	ui_container.add_child(res_hbox)
 
 	# Gene Histogram
 	ui_container.add_child(HSeparator.new())

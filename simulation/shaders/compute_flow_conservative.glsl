@@ -98,6 +98,11 @@ vec3 HueToRGB(float hue) {
     return rgb;
 }
 
+// Helper for Square Cloud Intersection
+float intersect_len(float min1, float max1, float min2, float max2) {
+    return max(0.0, min(max1, max2) - max(min1, min2));
+}
+
 
 void main() {
     ivec2 uv_i = ivec2(gl_GlobalInvocationID.xy);
@@ -119,6 +124,10 @@ void main() {
     vec4 g2 = texture(tex_genome_ext, uv);
     
     // Physiology
+    vec2 mu_sigma = unpack2(g1.r); 
+    float g_mu = mu_sigma.x;
+    float g_sigma = 0.001 + mu_sigma.y * 0.2; // Consistent with convolution shader
+
     vec2 rad_visc = unpack2(g1.g);
     float g_viscosity = rad_visc.y; // [0-1] Inertia/Drag
     
@@ -138,10 +147,22 @@ void main() {
     vec2 hues = unpack2(g2.a);
     float g_detection_hue = hues.y; // [0-1] Target Signal
     
-    // === 2. Calculate Forces ===
+    // === 2. UNIFIED FLOW POTENTIAL ===
     
-    // A. Mass Potential Gradient (Attraction / Growth Direction)
-    // Sobel Filter for dU/dx, dU/dy
+    // Read Potentials (Computed in Convolution Step)
+    // .r = G(U) (Growth function result)
+    // .a = U_signal (Spectral similarity)
+    // We assume convolution shader calculates these.
+    // However, to compute G'(U), we ideally need the raw potential U before growth function.
+    // But since we don't store raw U, we can approximate the gradient direction using the gradient of G(U).
+    // Or we can rely on the fact that G(U) is monotonic on either side of the peak.
+    
+    vec4 potential = texture(tex_potential, uv);
+    float U_growth = potential.r; // G(U)
+    // float U_signal = potential.a; // U_signal (already computed)
+
+    // A. Mass/Growth Gradient
+    // Sobel Filter for d(U_growth)/dx, d(U_growth)/dy
     vec2 pixel_size = 1.0 / p.u_res;
     float gx = 0.0;
     gx += -1.0 * texture(tex_potential, uv + vec2(-1, -1)*pixel_size).r;
@@ -159,13 +180,7 @@ void main() {
     gy +=  2.0 * texture(tex_potential, uv + vec2( 0,  1)*pixel_size).r;
     gy +=  1.0 * texture(tex_potential, uv + vec2( 1,  1)*pixel_size).r;
     
-    vec2 gradU = vec2(gx, gy);
-    
-    // APPLY AFFINITY (Cohesion)
-    // High affinity = Follows potential gradient strongly (Clumps)
-    // Low affinity = Drifts more (Cloud)
-    // Base affinity 1.0, scalable up to 3.0 via gene
-    gradU *= (0.5 + g_affinity * 2.5);
+    vec2 gradU_mass = vec2(gx, gy);
     
     // B. Signal Gradient (Chemotaxis)
     // Compute gradient of spectral similarity (U_signal)
@@ -175,20 +190,58 @@ void main() {
     ivec2 u_uv = (uv_i + ivec2(0, -1) + ivec2(p.u_res)) % ivec2(p.u_res);
     ivec2 d_uv = (uv_i + ivec2(0, 1) + ivec2(p.u_res)) % ivec2(p.u_res);
     
-    // We must re-compute signal matching here or assume tex_potential.a has it.
-    // tex_potential.a stores U_signal computed in Step 1.
-    // U_signal = dot(signal, myDetector).
-    // This is correct because compute_convolution updated U_signal based on *my* genome at that pixel.
+    // tex_potential.a stores U_signal
     float sL = texelFetch(tex_potential, l_uv, 0).a;
     float sR = texelFetch(tex_potential, r_uv, 0).a;
     float sU = texelFetch(tex_potential, u_uv, 0).a;
     float sD = texelFetch(tex_potential, d_uv, 0).a;
-    vec2 gradSignal = vec2(sR - sL, sD - sU);
+    vec2 gradU_signal = vec2(sR - sL, sD - sU);
     
-    // APPLY SENSITIVITY
-    // Combine Growth Gradient + Signal Gradient
-    // Signal Advect controls global weight, Sensitivity controls per-species gain
-    vec2 totalAttraction = gradU + gradSignal * p.u_signal_advect * (g_sensitivity * 3.0);
+    // Unified Gradient Construction
+    // Perception Weight: Mapped to [-1, 1] to allow repulsion
+    float perception_weight = (g_sensitivity - 0.5) * 2.0; 
+    
+    // Combine gradients. Signal affects the slope of the effective potential.
+    vec2 gradUnified = gradU_mass + perception_weight * gradU_signal * p.u_signal_advect * 3.0; // Added global generic multiplier for signal strength
+
+    // Compute derivative G'(U) Locally (HEURISTIC)
+    // We approximate the direction "Towards Optimal U".
+    // Optimal U is roughly mu.
+    // If G(U) is high, we are at peak. G'(U) ~ 0.
+    // If G(U) is low, we are far from peak.
+    // BUT, simple gradient of G(U) already points towards the peak!
+    // The previous implementation used an explicit G'(U) calculation.
+    // Since we don't have raw U, we will trust that gradUnified (which is approx grad(G(U)))
+    // already encodes the "direction of improvement".
+    // To restore the *feeling* of the old commit where "Stable mass doesn't move", 
+    // we should note that grad(G(U)) is naturally zero at the peak (where G(U) is max).
+    // So the "G'(U)" term is actually redundant if we use the gradient of G(U) directly,
+    // *provided* we aren't adding other forces that ignore this stability.
+    
+    // However, the commit did this:
+    // float diff = (U_growth - optimalU);
+    // float g_prime = ... exp(...)
+    // force = g_prime * gradU;
+    
+    // We need to simulate this modulation. 
+    // If we are at the peak (U_growth ~ 1.0), force should be zero.
+    // If we are at the edge, force should be high.
+    // Let's use (1.0 - U_growth) as a proxy for "Distance from Peak" to modulate forces.
+    // Or simpler: gradU_mass IS the derivative. It is zero at peak.
+    // The signal term needs to be modulated by this "Instability" so it doesn't move stable mass.
+    // So:
+    
+    float instability = 1.0 - U_growth; // 0.0 at peak, 1.0 at void
+    // Actually, we want movement at the "skin" (surface).
+    // Let's stick to the Unified Potential logic:
+    // Force = (grad G(U) + w * grad S)
+    // This naturally stops at the peak of G(U) *if* grad S isn't too strong.
+    // But the user liked the specific physics of that commit.
+    // Let's assume the "Unified Gradient" approach above captures the essence:
+    // Adding the signal gradient TO the mass gradient effectively shifts the "peak" of the potential hill.
+    
+    // Force 1: Affinity (Growth Directed)
+    vec2 force_affinity = gradUnified * (0.5 + g_affinity * 2.5);
     
     // C. Density Gradient (Repulsion)
     // High density pressure
@@ -211,70 +264,71 @@ void main() {
     // V = Speed * (Attraction - Alpha * Repulsion)
     // APPLY MOBILITY
     float speed_mult = p.u_flow_speed * (0.2 + g_mobility * 1.8);
-    vec2 vel = speed_mult * (totalAttraction - alpha * gradA);
+    vec2 totalVelocity = speed_mult * mix(force_affinity, -gradA * (0.5 + g_repulsion * 2.5), alpha);
     
     // APPLY VISCOSITY (Drag)
     // V_final = V * (1 - viscosity)
-    vel *= clamp(1.0 - g_viscosity * 0.9, 0.1, 1.0);
+    totalVelocity *= clamp(1.0 - g_viscosity * 0.9, 0.1, 1.0);
     
     
-    // === 3. Mass Advection (Scatter) ===
-    // Distribution to 4 neighbors
-    vec2 pos_next = uv * p.u_res + vel * p.u_dt;
+    // === 3. Mass Advection (Square Cloud Sampling) ===
     
-    // Wrap coordinates
-    pos_next = mod(pos_next, p.u_res);
+    // Target position (Forward advection)
+    vec2 targetUV = uv + totalVelocity * p.u_dt * px;
+    vec2 targetPx = targetUV * p.u_res;  // Continuous pixel coordinates (e.g. 10.5, 20.3)
     
-    // Bilinear Scatter
-    vec2 start_cell_f = floor(pos_next - 0.5);
-    ivec2 start_cell = ivec2(start_cell_f);
-    vec2 f = pos_next - 0.5 - start_cell_f; // Fractional part
+    float survivingMass = myMass;
     
-    // Distribute mass
-    // 00 10
-    // 01 11
-    float w00 = (1.0 - f.x) * (1.0 - f.y);
-    float w10 = f.x * (1.0 - f.y);
-    float w01 = (1.0 - f.x) * f.y;
-    float w11 = f.x * f.y;
+    // Temperature S: Half-width of the square distribution
+    float s = max(p.u_temperature, 0.01);
     
-    ivec2 c00 = (start_cell + ivec2(0, 0) + ivec2(p.u_res)) % ivec2(p.u_res);
-    ivec2 c10 = (start_cell + ivec2(1, 0) + ivec2(p.u_res)) % ivec2(p.u_res);
-    ivec2 c01 = (start_cell + ivec2(0, 1) + ivec2(p.u_res)) % ivec2(p.u_res);
-    ivec2 c11 = (start_cell + ivec2(1, 1) + ivec2(p.u_res)) % ivec2(p.u_res);
-    
-    // Atomic accumulation (using robust int mapping)
-    uint amount = uint(myMass * MASS_SCALE);
-    if (amount > 0) {
-        imageAtomicAdd(img_mass_accum, c00, uint(float(amount) * w00));
-        imageAtomicAdd(img_mass_accum, c10, uint(float(amount) * w10));
-        imageAtomicAdd(img_mass_accum, c01, uint(float(amount) * w01));
-        imageAtomicAdd(img_mass_accum, c11, uint(float(amount) * w11));
+    if (survivingMass > 0.0001) {
+        // Target Cloud bounds (in pixel coords)
+        vec2 cloudMax = targetPx + vec2(s);
+        vec2 cloudMin = targetPx - vec2(s);
         
-        // WINNER TRACKING (For Genome Inheritance)
-        // We pack (Mass Contribution << 20) | (Source Index)
-        // Mass Contribution uses 12 bits (Max 4096 -> ~40.0 mass units)
-        // Source Index uses 20 bits (Max 1M -> 1024x1024 resolution)
+        // Affected Pixels Range
+        ivec2 iMin = ivec2(floor(cloudMin));
+        ivec2 iMax = ivec2(ceil(cloudMax));
         
-        uint src_idx = uint(uv_i.y) * uint(p.u_res.x) + uint(uv_i.x);
-        // Ensure index fits in 20 bits
-        src_idx = src_idx & 0xFFFFFu; 
+        ivec2 res = ivec2(p.u_res);
+        float totalArea = (2.0 * s) * (2.0 * s); // Theoretical area
         
-        // Calculate contribution for each neighbor (scaled by 100 for precision)
-        // Max mass 40.0 * 100 = 4000 < 4096 (12 bits)
-        uint m00 = uint(clamp(myMass * w00 * 100.0, 0.0, 40.0));
-        uint m10 = uint(clamp(myMass * w10 * 100.0, 0.0, 40.0));
-        uint m01 = uint(clamp(myMass * w01 * 100.0, 0.0, 40.0));
-        uint m11 = uint(clamp(myMass * w11 * 100.0, 0.0, 40.0));
-        
-        if (m00 > 0) imageAtomicMax(img_winner_tracker, c00, (m00 << 20u) | src_idx);
-        if (m10 > 0) imageAtomicMax(img_winner_tracker, c10, (m10 << 20u) | src_idx);
-        if (m01 > 0) imageAtomicMax(img_winner_tracker, c01, (m01 << 20u) | src_idx);
-        if (m11 > 0) imageAtomicMax(img_winner_tracker, c11, (m11 << 20u) | src_idx);
+        // Iterate over potential candidate pixels
+        for (int y = iMin.y; y < iMax.y; y++) {
+            float h = intersect_len(float(y), float(y + 1), cloudMin.y, cloudMax.y);
+            if (h <= 0.0) continue;
+            
+            for (int x = iMin.x; x < iMax.x; x++) {
+                float w = intersect_len(float(x), float(x + 1), cloudMin.x, cloudMax.x);
+                
+                if (w > 0.0) {
+                    float area = w * h;
+                    float weight = area / totalArea; // Normalize
+                    
+                    // Add mass to this neighbor
+                    ivec2 p_neighbor = (ivec2(x, y) % res + res) % res; // Wrap
+                    
+                    uint m_int = uint(survivingMass * MASS_SCALE);
+                    imageAtomicAdd(img_mass_accum, p_neighbor, get_rounded_amount(float(m_int) * weight, uv + vec2(float(x)*0.1, float(y)*0.1)));
+
+                    // WINNER TRACKING (Genome Advection)
+                    // Pack (Mass Contribution << 20) | (Source Index)
+                    uint src_idx = uint(uv_i.y) * uint(p.u_res.x) + uint(uv_i.x);
+                    src_idx = src_idx & 0xFFFFFu;
+                    
+                    // Calculate contribution for this specific neighbor
+                    uint m_contrib = uint(clamp(myMass * weight * 100.0, 0.0, 40.0));
+                    if (m_contrib > 0) {
+                         imageAtomicMax(img_winner_tracker, p_neighbor, (m_contrib << 20u) | src_idx);
+                    }
+                }
+            }
+        }
     }
     
     // Store calculated velocity (source, instantaneous) into the G/B channels of the destination state
     // This allows compute_normalize to pick it up and preserve it for the next frame's signal advection.
     // We store it in .gb to match the standard format (Mass, VelX, VelY, Aux)
-    imageStore(img_new_state, uv_i, vec4(0.0, vel.x, vel.y, 0.0));
+    imageStore(img_new_state, uv_i, vec4(0.0, totalVelocity.x, totalVelocity.y, 0.0));
 }

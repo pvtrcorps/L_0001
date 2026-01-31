@@ -171,7 +171,7 @@ void main() {
     }
     
     // Store final state (Mass, Velocity, Debug/Extra)
-    if (finalMass < 0.0001) {
+    if (finalMass <= 0.0) {
         imageStore(img_new_state, uv_i, vec4(0.0));
         imageStore(img_new_genome, uv_i, vec4(0.0));
         imageStore(img_new_genome_ext, uv_i, vec4(0.0));

@@ -244,12 +244,20 @@ void main() {
     ivec2 c11 = (start_cell + ivec2(1, 1) + ivec2(p.u_res)) % ivec2(p.u_res);
     
     // Atomic accumulation (using robust int mapping)
-    uint amount = uint(myMass * MASS_SCALE);
+    // STOCHASTIC ROUNDING to preserve fractional mass over time
+    // We mix uv and u_seed to get a unique random value per pixel per frame
+    uint amount = get_rounded_amount(myMass * MASS_SCALE, uv + vec2(p.u_seed));
     if (amount > 0) {
-        imageAtomicAdd(img_mass_accum, c00, uint(float(amount) * w00));
-        imageAtomicAdd(img_mass_accum, c10, uint(float(amount) * w10));
-        imageAtomicAdd(img_mass_accum, c01, uint(float(amount) * w01));
-        imageAtomicAdd(img_mass_accum, c11, uint(float(amount) * w11));
+        // Guaranteed Conservation: Calculate 3, remainder goes to 4th
+        uint a00 = uint(float(amount) * w00);
+        uint a10 = uint(float(amount) * w10);
+        uint a01 = uint(float(amount) * w01);
+        uint a11 = amount - a00 - a10 - a01; // The remainder ensures Sum == Amount
+        
+        imageAtomicAdd(img_mass_accum, c00, a00);
+        imageAtomicAdd(img_mass_accum, c10, a10);
+        imageAtomicAdd(img_mass_accum, c01, a01);
+        imageAtomicAdd(img_mass_accum, c11, a11);
         
         // WINNER TRACKING (For Genome Inheritance)
         // We pack (Mass Contribution << 24) | (Source Index)
@@ -262,13 +270,11 @@ void main() {
         // If we send mass (weighted amount > 0), we MUST register at least 1 unit of claim.
         // Otherwise, the mass arrives anonymously and becomes a "Null Species" (Ghost).
         
-        // Threshold check for atomicAdd was: amount * wXX
-        // We replicate that logic for the tracker:
+        // WINNER TRACKING (For Genome Inheritance)
         
-        uint a00 = uint(float(amount) * w00);
-        uint a10 = uint(float(amount) * w10);
-        uint a01 = uint(float(amount) * w01);
-        uint a11 = uint(float(amount) * w11);
+        // We already have the exact amounts a00..a11 calculated above!
+        // No need to recalculate and risk mismatches.
+
         
         // Calculate tracker score (still scaled for competition), but floor clamped to 1 if mass exists.
         // Scale reduced to fit 8-bit (255 max). 

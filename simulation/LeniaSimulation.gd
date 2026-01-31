@@ -113,8 +113,18 @@ var paused := false # Pause state
 # Uniform Set Cache
 var set_cache = {}
 
+# Analysis Thread
+var analysis_thread: Thread
+var is_analysis_running := false
+
+# Async Readback State
+var stats_readback_frame: int = -1
+var analysis_readback_frame: int = -1
+const READBACK_DELAY = 2 # Frames to wait for GPU
+
+# Staggered offsets
 var stats_frame_count := 0
-var analysis_frame_count := 0
+var analysis_frame_count := 10 # Offset by 10 frames to avoid double-spike
 var last_analysis_bytes: PackedByteArray
 var last_species_list = []
 
@@ -139,6 +149,9 @@ func _ready():
 	_create_sampler()
 	_create_uniforms()
 	
+	# Update UBO with initial params before shader runs
+	_update_ubo()
+	
 	# Run Init once
 	_dispatch_init()
 	initialized = true
@@ -149,6 +162,61 @@ func _ready():
 	camera.inspect_requested.connect(_on_camera_inspect)
 	
 	print("Parametric Lenia with Signaling initialized.")
+
+func _exit_tree():
+	if analysis_thread and analysis_thread.is_started():
+		analysis_thread.wait_to_finish()
+
+
+
+func resize_simulation(new_size: int):
+	# 1. Stop processing
+	initialized = false
+	
+	# 2. Wait for background thread
+	if analysis_thread and analysis_thread.is_started():
+		analysis_thread.wait_to_finish()
+	is_analysis_running = false
+	
+	# 3. Cleanup existing GPU resources
+	_cleanup_gpu_resources()
+	
+	# 4. Update Params
+	params["res_x"] = float(new_size)
+	params["res_y"] = float(new_size)
+	
+	# 5. Re-create resources with new size
+	_create_textures()
+	_create_sampler()
+	_create_uniforms()
+	
+	# 6. Clear cache (RIDs are invalid)
+	set_cache.clear()
+	
+	_update_ubo()
+	
+	# 7. Initialize
+	_dispatch_init()
+	initialized = true
+	
+	print("Simulation Resized to: ", new_size)
+
+func _cleanup_gpu_resources():
+	# Free Buffers
+	if ubo.is_valid(): rd.free_rid(ubo)
+	if stats_buffer.is_valid(): rd.free_rid(stats_buffer)
+	if analysis_buffer.is_valid(): rd.free_rid(analysis_buffer)
+	
+	# Free Textures
+	var textures_to_free = [
+		tex_state_a, tex_state_b,
+		tex_genome_a, tex_genome_b, tex_genome_ext_a, tex_genome_ext_b,
+		tex_potential, tex_mass_accum, tex_winner_tracker,
+		tex_signal_a, tex_signal_b
+	]
+	
+	for rid in textures_to_free:
+		if rid.is_valid(): rd.free_rid(rid)
 
 func _process(_delta):
 	if not initialized: return
@@ -161,14 +229,23 @@ func _process(_delta):
 		_update_ubo()
 		_dispatch_step()
 	
-	# 2. Performance Counters & Throttled Readbacks
+	# 2. Performance Counters & Async Readbacks
 	stats_frame_count += 1
-	if stats_frame_count >= 10:
-		stats_frame_count = 0
-		# Run Stats Pass ONLY when needed
+	analysis_frame_count += 1
+
+	var current_frame = Engine.get_process_frames()
+	
+	# === STATS SCHEDULE (Every 15 frames) ===
+	if stats_frame_count >= 15:
+		stats_frame_count = 0 
 		_dispatch_stats()
+		stats_readback_frame = current_frame + READBACK_DELAY
+
+	# === STATS READBACK ===
+	if current_frame == stats_readback_frame:
+		# Retrieve Data (Should be ready now)
 		var bytes = rd.buffer_get_data(stats_buffer)
-		if bytes.size() >= 648: # Updated size check
+		if bytes.size() >= 648:
 			var ints = bytes.to_int32_array()
 			var total_mass = float(ints[0]) / 1000.0
 			var population = ints[1]
@@ -182,17 +259,27 @@ func _process(_delta):
 				histograms.append(bins)
 			emit_signal("stats_updated", total_mass, population, histograms)
 	
-	analysis_frame_count += 1
-	if analysis_frame_count >= 30:
+	# === ANALYSIS SCHEDULE (Every 60 frames) ===
+	if analysis_frame_count >= 60:
 		analysis_frame_count = 0
-		# Run Analysis Pass ONLY when needed
-		_dispatch_analysis()
+		if not is_analysis_running: # Don't queue if previous is still running
+			_dispatch_analysis()
+			analysis_readback_frame = current_frame + READBACK_DELAY
+	
+	# === ANALYSIS READBACK & THREAD START ===
+	if current_frame == analysis_readback_frame:
 		var bytes = rd.buffer_get_data(analysis_buffer)
 		if bytes.size() >= 294912:
 			last_analysis_bytes = bytes
-			var species_list = tracker.find_species(bytes)
-			last_species_list = species_list
-			emit_signal("species_list_updated", species_list)
+			
+			# Start Background Thread
+			if analysis_thread:
+				if analysis_thread.is_started():
+					analysis_thread.wait_to_finish() # Clean up previous (should be done)
+			
+			analysis_thread = Thread.new()
+			is_analysis_running = true
+			analysis_thread.start(_run_species_analysis.bind(bytes))
 	
 	# Update Display Material
 	if display_material:
@@ -216,6 +303,21 @@ func _process(_delta):
 		display_material.set_shader_parameter("camera_pos", camera.camera_pos)
 		display_material.set_shader_parameter("camera_zoom", camera.camera_zoom)
 		display_material.set_shader_parameter("tex_genome_ext", texture_rd_genome_ext)
+
+func _run_species_analysis(bytes: PackedByteArray):
+	# Heavy lifting (200k+ iterations) done here
+	var species_list = tracker.find_species(bytes)
+	
+	# Return to main thread
+	call_deferred("_on_analysis_complete", species_list)
+
+func _on_analysis_complete(species_list):
+	is_analysis_running = false
+	last_species_list = species_list
+	emit_signal("species_list_updated", species_list)
+	
+	# Clean up thread reference if needed, though wait_to_finish covers it
+
 
 func _update_ubo():
 	# UBO layout: Must be carefully aligned to vec4 (16 bytes)

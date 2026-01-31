@@ -72,6 +72,32 @@ func _build_ui():
 	stats_header.add_theme_font_size_override("font_size", 14)
 	stats_header.add_theme_font_size_override("font_size", 14)
 	ui_container.add_child(stats_header)
+	
+	# Resolution Selector
+	var res_hbox = HBoxContainer.new()
+	var res_label = Label.new()
+	res_label.text = "Resolution:"
+	res_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	
+	var res_opt = OptionButton.new()
+	res_opt.add_item("512x512")
+	res_opt.add_item("1024x1024")
+	res_opt.add_item("2048x2048")
+	res_opt.selected = 1 # Default 1024
+	
+	res_opt.item_selected.connect(func(idx):
+		var size = 1024
+		if idx == 0: size = 512
+		elif idx == 1: size = 1024
+		elif idx == 2: size = 2048
+		sim.resize_simulation(size)
+	)
+	
+	res_hbox.add_child(res_label)
+	res_hbox.add_child(res_opt)
+	ui_container.add_child(res_hbox)
+	ui_container.add_child(HSeparator.new())
+
 
 	# Floating Tooltip (Child of CanvasLayer)
 	tooltip_panel = PanelContainer.new()

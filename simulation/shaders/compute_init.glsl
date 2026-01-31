@@ -72,7 +72,7 @@ void main() {
     #define GEN_GENE(offset, range_vec) mix(range_vec.x, range_vec.y, hash(species_seed + offset))
     
     // -- BLOCK A: Physiology --
-    float g_mu = GEN_GENE(1.0, p.r_mu);
+    float g_mu = max(GEN_GENE(1.0, p.r_mu), 0.001); // Min 0.001 to avoid vacuum explosion
     float g_sigma = GEN_GENE(2.0, p.r_sigma);
     float g_radius = GEN_GENE(3.0, p.r_radius);
     float g_viscosity = GEN_GENE(4.0, p.r_viscosity);
@@ -97,20 +97,27 @@ void main() {
     
     // 3. Packing
     // Genome 1 (Physiology & Morphology)
-    vec4 packed_1 = vec4(
-        pack2(g_mu, g_sigma),           // R: Metabolism
-        pack2(g_radius, g_viscosity),   // G: Body Props
-        pack2(g_shape_a, g_shape_b),    // B: Shape 1
-        pack2(g_shape_c, g_ring_width) // A: Shape 2 / Vitality
-    );
-    
-    // Genome 2 (Behavior & Senses)
-    vec4 packed_2 = vec4(
-        pack2(g_affinity, g_repulsion),         // R: Social
-        pack2(g_density_tol, g_mobility),       // G: Tolerance/Speed
-        pack2(g_secretion, g_sensitivity),      // B: Signal Volume/Gain
-        pack2(g_emission_hue, g_detection_hue)  // A: Signal Channels
-    );
+    // FIX: Revert to "Null Genome" (0.0).
+    // The "Vacuum Death" rule in compute_convolution.glsl will prevent spontaneous generation.
+    vec4 packed_1 = vec4(0.0);
+    vec4 packed_2 = vec4(0.0);
+
+    if (density > 0.001) {
+        packed_1 = vec4(
+            pack2(g_mu, g_sigma),           // R: Metabolism
+            pack2(g_radius, g_viscosity),   // G: Body Props
+            pack2(g_shape_a, g_shape_b),    // B: Shape 1
+            pack2(g_shape_c, g_ring_width) // A: Shape 2 / Vitality
+        );
+        
+        // Genome 2 (Behavior & Senses)
+        packed_2 = vec4(
+            pack2(g_affinity, g_repulsion),         // R: Social
+            pack2(g_density_tol, g_mobility),       // G: Tolerance/Speed
+            pack2(g_secretion, g_sensitivity),      // B: Signal Volume/Gain
+            pack2(g_emission_hue, g_detection_hue)  // A: Signal Channels
+        );
+    }
     
     // Spectral genes are now fully integrated into Genome Ext (Channel A)
     // We no longer need to pack them into state.a, but we might keep them there

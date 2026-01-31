@@ -98,9 +98,12 @@ void main() {
     uint packed = imageLoad(img_winner_tracker, uv_i).r;
     imageStore(img_winner_tracker, uv_i, uvec4(0));
     
-    vec4 finalGenome1 = texture(tex_old_genome, uv);
-    vec4 finalGenome2 = texture(tex_genome_ext, uv); 
+    vec4 finalGenome1 = vec4(0.0); // Default to Void
+    vec4 finalGenome2 = vec4(0.0);
     
+    // If no advection happened (packed == 0), we might keep the old genome
+    // IF there is significant standing mass.
+    // But if it's void (Mass ~ 0), we should clear it to ensure clean backround.
     if (packed != 0) {
         uint winner_idx = packed & 0xFFFFFFu; 
         
@@ -110,6 +113,15 @@ void main() {
         
         finalGenome1 = texture(tex_old_genome, winner_uv);
         finalGenome2 = texture(tex_genome_ext, winner_uv);
+    } else {
+        // No advection winner.
+        // Copy old genome ONLY if mass exists (Standing wave / Static)
+        // If mass is 0, let it be Void (0.0)
+        // Note: we read 'mass' from atomic accum at step 1.
+        if (mass > 0.001) {
+             finalGenome1 = texture(tex_old_genome, uv);
+             finalGenome2 = texture(tex_genome_ext, uv); 
+        }
     }
     
     // Write BOTH genomes to new generation (Move identity)
@@ -128,8 +140,18 @@ void main() {
     // 5. Final Mass & Emission
     float finalMass = mass;
     
+    // FIX: "Ghostbuster" Protocol
+    // If the pixel has "Null Genes" (Micro Globus Pigra), it implies it belongs to the void.
+    // However, it might have accumulated orphan mass that failed to bring its genes.
+    // This mass acts as an invisible, immobile obstacle (Mobility=0) that "tears" species.
+    // We MUST destroy this mass to keep the void fluid.
+    vec2 phys = unpack2(finalGenome1.r);
+    if (phys.x < 0.0001) {
+        finalMass = 0.0;
+    }
+    
     if (finalMass > 0.05) {
-        vec3 emittedColor = HueToRGB(g_emission_hue);
+        vec3 emittedColor = normalize(HueToRGB(g_emission_hue));
         vec4 currentSignal = imageLoad(img_new_signal, uv_i); 
         
         // Add emission

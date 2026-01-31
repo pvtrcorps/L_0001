@@ -318,7 +318,21 @@ void main() {
                     src_idx = src_idx & 0xFFFFFFu;
                     
                     // Calculate contribution for this specific neighbor
-                    uint m_contrib = uint(clamp(myMass * weight * 100.0, 0.0, 40.0));
+                    // FIX: Use Sqrt Curve for Advection Score
+                    // 1. Allows small mass to pass threshold (> 1) -> Breaks Invisible Walls
+                    // 2. Prevents saturation at 250 -> Prevents "Left-Up Bias" (Index War)
+                    // 3. Add DITHERING to prevent "Diagonal Cuts" (Quantization Banding)
+                    uint m_contrib = 0;
+                    float mass_contribution = myMass * weight;
+                    if (mass_contribution > 1.0e-7) {
+                         // Dithering: Add small noise to break ties in discrete bands
+                         float noise = fract(sin(dot(vec2(p_neighbor), vec2(12.9898, 78.233))) * 43758.5453);
+                         float dither = noise * 0.9;
+                         
+                         // Sqrt curve + Dither
+                         m_contrib = uint(clamp(sqrt(mass_contribution) * 200.0 + dither, 1.0, 250.0));
+                    }
+
                     if (m_contrib > 0) {
                          imageAtomicMax(img_winner_tracker, p_neighbor, (m_contrib << 24u) | src_idx);
                     }

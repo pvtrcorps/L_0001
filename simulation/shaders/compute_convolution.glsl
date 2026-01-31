@@ -141,7 +141,7 @@ void main() {
     float g_detection_hue = hue_hue.y;
     
     // === SPECTRAL SIGNAL ===
-    vec3 myDetector = HueToRGB(g_detection_hue);
+    vec3 myDetector = normalize(HueToRGB(g_detection_hue));
     vec3 signalVec = texture(tex_signal, uv).rgb;
     float U_signal = dot(signalVec, myDetector); 
     
@@ -181,9 +181,17 @@ void main() {
     float mu = g_mu; 
     float sigma = 0.001 + g_sigma * 0.2; // Scaling for stability
     
-    float diff = (U_raw - mu);
-    float exp_term = exp(-0.5 * (diff * diff) / max(sigma * sigma, 0.0001));
-    float U_growth = 2.0 * exp_term - 1.0; 
+    // FIX: Vacuum Death Rule + Null Genome Ban
+    // 1. If Potential U is effectively zero (Vacuum), force death.
+    // 2. If mu is zero (Null Genome), force death. (Prevents "Micro Globus Pigra" artifacts)
+    float U_growth;
+    if (U_raw < 0.000001 || g_mu < 0.0001) {
+        U_growth = -1.0;
+    } else {
+        float diff = (U_raw - mu);
+        float exp_term = exp(-0.5 * (diff * diff) / max(sigma * sigma, 0.0001));
+        U_growth = 2.0 * exp_term - 1.0; 
+    } 
     
     imageStore(img_potential, uv_i, vec4(U_growth, 0.0, 0.0, U_signal));
 }

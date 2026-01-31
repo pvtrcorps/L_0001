@@ -175,6 +175,10 @@ func find_species(byte_data: PackedByteArray) -> Array:
 		cg.resize(16)
 		for k in range(16):
 			cg[k] = floats[base + 1 + k]
+		
+		# Skip Null Species (Void Background)
+		# Since we clamped generated genes to 0.001, anything below that is void.
+		if cg[G_MU] < 0.0001: continue
 			
 		var best_match_idx = -1
 		var min_dist = GENE_SIMILARITY_THRESHOLD

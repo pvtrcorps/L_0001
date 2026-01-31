@@ -7,6 +7,7 @@ var histogram_display
 var species_container
 var tooltip_panel
 var tooltip_label
+var tooltip_preview_mat : ShaderMaterial
 
 
 
@@ -42,6 +43,8 @@ var ui_schema = {
 		["g_radius_max", "Effect Radius Max", 0.0, 1.0, 0.05],
 		["g_viscosity_min", "Viscosity Min", 0.0, 1.0, 0.05],
 		["g_viscosity_max", "Viscosity Max", 0.0, 1.0, 0.05],
+		["g_ring_width_min", "Ring Width Min", 0.0, 1.0, 0.05],
+		["g_ring_width_max", "Ring Width Max", 0.0, 1.0, 0.05],
 		["g_mobility_min", "Mobility Min", 0.0, 1.0, 0.05],
 		["g_mobility_max", "Mobility Max", 0.0, 1.0, 0.05],
 		["g_affinity_min", "Cohesion (Affinity) Min", 0.0, 1.0, 0.05],
@@ -111,10 +114,29 @@ func _build_ui():
 	style.content_margin_top = 4
 	style.content_margin_bottom = 4
 	tooltip_panel.add_theme_stylebox_override("panel", style)
-	
+
+	var vbox = VBoxContainer.new()
+	tooltip_panel.add_child(vbox)
+
+	# Kernel Visualizer
+	var preview_lbl = Label.new()
+	preview_lbl.text = "Kernel Shape:"
+	preview_lbl.add_theme_font_size_override("font_size", 9)
+	preview_lbl.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+	vbox.add_child(preview_lbl)
+
+	var preview_rect = ColorRect.new()
+	preview_rect.custom_minimum_size = Vector2(128, 128)
+	preview_rect.color = Color(0,0,0,1)
+	vbox.add_child(preview_rect)
+
+	tooltip_preview_mat = ShaderMaterial.new()
+	tooltip_preview_mat.shader = load("res://simulation/display/kernel_preview.gdshader")
+	preview_rect.material = tooltip_preview_mat
+
 	tooltip_label = Label.new()
 	tooltip_label.add_theme_font_size_override("font_size", 11)
-	tooltip_panel.add_child(tooltip_label)
+	vbox.add_child(tooltip_label)
 	
 	get_node("CanvasLayer").add_child(tooltip_panel)
 
@@ -249,6 +271,7 @@ func _build_ui():
 	btn_reset.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	btn_reset.pressed.connect(func(): sim.reset_simulation())
 	btn_row.add_child(btn_reset)
+
 	
 	var btn_clear = Button.new()
 	btn_clear.text = "CLEAR"
@@ -303,7 +326,7 @@ func _on_species_hovered(info):
 			
 			txt += "[Morphology]\n"
 			txt += "  Shape A/B/C: %.2f / %.2f / %.2f\n" % [info.get("shape_a", 0.0), info.get("shape_b", 0.0), info.get("shape_c", 0.0)]
-			txt += "  Growth: %.2f\n" % info.get("growth_rate", 0.0)
+			txt += "  Width: %.2f\n" % info.get("ring_width", 0.0)
 			
 			txt += "[Behavior]\n"
 			txt += "  Aff: %.2f | Rep: %.2f\n" % [info.get("affinity", 0.0), info.get("repulsion", 0.0)]
@@ -315,6 +338,12 @@ func _on_species_hovered(info):
 			
 			if tooltip_label:
 				tooltip_label.text = txt
+				
+			if tooltip_preview_mat:
+				tooltip_preview_mat.set_shader_parameter("shape_a", info.get("shape_a", 0.0))
+				tooltip_preview_mat.set_shader_parameter("shape_b", info.get("shape_b", 0.0))
+				tooltip_preview_mat.set_shader_parameter("shape_c", info.get("shape_c", 0.0))
+				tooltip_preview_mat.set_shader_parameter("ring_width", info.get("ring_width", 0.0))
 
 	# Move tooltip to mouse
 	if tooltip_panel.visible:

@@ -15,7 +15,7 @@ const G_VISCOSITY = 3
 const G_SHAPE_A = 4
 const G_SHAPE_B = 5
 const G_SHAPE_C = 6
-const G_GROWTH = 7
+const G_RING_WIDTH = 7
 const G_AFFINITY = 8
 const G_REPULSION = 9
 const G_DENSITY_TOL = 10
@@ -35,7 +35,7 @@ class Species:
 		# Phys
 		"mu": 0.0, "sigma": 0.0, "radius": 0.0, "viscosity": 0.0,
 		# Morph
-		"shape_a": 0.0, "shape_b": 0.0, "shape_c": 0.0, "growth_rate": 0.0,
+		"shape_a": 0.0, "shape_b": 0.0, "shape_c": 0.0, "ring_width": 0.0,
 		# Behavior
 		"affinity": 0.0, "repulsion": 0.0, "density_tol": 0.0, "mobility": 0.0,
 		# Senses
@@ -58,7 +58,7 @@ class Species:
 		genes_sum["shape_a"] += sample_genes[G_SHAPE_A]
 		genes_sum["shape_b"] += sample_genes[G_SHAPE_B]
 		genes_sum["shape_c"] += sample_genes[G_SHAPE_C]
-		genes_sum["growth_rate"] += sample_genes[G_GROWTH]
+		genes_sum["ring_width"] += sample_genes[G_RING_WIDTH]
 		
 		genes_sum["affinity"] += sample_genes[G_AFFINITY]
 		genes_sum["repulsion"] += sample_genes[G_REPULSION]

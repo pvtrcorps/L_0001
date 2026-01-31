@@ -47,8 +47,8 @@ extends Resource
 @export var g_shape_b_max: float = 1.0
 @export var g_shape_c_min: float = 0.0
 @export var g_shape_c_max: float = 1.0
-@export var g_growth_rate_min: float = 0.0
-@export var g_growth_rate_max: float = 1.0
+@export var g_ring_width_min: float = 0.0
+@export var g_ring_width_max: float = 1.0
 
 @export_group("Genetics: Social & Motor")
 @export var g_affinity_min: float = 0.0

@@ -48,7 +48,7 @@ var params = {
 	"g_shape_a_min": 0.0, "g_shape_a_max": 1.0, # 5. Ring Balance
 	"g_shape_b_min": 0.0, "g_shape_b_max": 1.0, # 6. Complexity
 	"g_shape_c_min": 0.0, "g_shape_c_max": 1.0, # 7. Ring Spacing
-	"g_growth_rate_min": 0.0, "g_growth_rate_max": 1.0, # 8. Vitality
+	"g_ring_width_min": 0.0, "g_ring_width_max": 1.0, # 8. Ring Width (Sharpness)
 	
 	# BLOCK C: Social & Motor (Mind)
 	"g_affinity_min": 0.0, "g_affinity_max": 1.0, # 9. Cohesion
@@ -343,7 +343,7 @@ func _update_ubo():
 		
 		# Block B: Morphology (4 Genes)
 		params["g_shape_a_min"], params["g_shape_a_max"], params["g_shape_b_min"], params["g_shape_b_max"],
-		params["g_shape_c_min"], params["g_shape_c_max"], params["g_growth_rate_min"], params["g_growth_rate_max"],
+		params["g_shape_c_min"], params["g_shape_c_max"], params["g_ring_width_min"], params["g_ring_width_max"],
 		
 		# Block C: Social / Motor (4 Genes)
 		params["g_affinity_min"], params["g_affinity_max"], params["g_repulsion_min"], params["g_repulsion_max"],
@@ -983,7 +983,7 @@ func get_species_info_at(uv: Vector2) -> Dictionary:
 		"shape_a": floats[base+5],
 		"shape_b": floats[base+6],
 		"shape_c": floats[base+7],
-		"growth_rate": floats[base+8],
+		"ring_width": floats[base+8],
 		"affinity": floats[base+9],
 		"repulsion": floats[base+10],
 		"density_tol": floats[base+11],

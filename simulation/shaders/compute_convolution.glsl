@@ -24,7 +24,7 @@ layout(set = 0, binding = 0, std430) buffer Params {
     // Block A: Physiology
     vec2 r_mu; vec2 r_sigma; vec2 r_radius; vec2 r_viscosity;
     // Block B: Morphology
-    vec2 r_shape_a; vec2 r_shape_b; vec2 r_shape_c; vec2 r_growth_rate;
+    vec2 r_shape_a; vec2 r_shape_b; vec2 r_shape_c; vec2 r_ring_width;
     // Block C: Social / Motor
     vec2 r_affinity; vec2 r_repulsion; vec2 r_density_tol; vec2 r_mobility;
     // Block D: Senses
@@ -63,6 +63,7 @@ float kernel(float r, float R_actual, vec4 genome_1) {
     float shape_a = shape_ab.x; // Ring Balance (Inner vs Outer)
     float shape_b = shape_ab.y; // Complexity / Texture
     float shape_c = shape_c_gr.x; // Ring Spacing / Position
+    float ring_width = shape_c_gr.y; // Ring Width / Sharpness
     
     // Map Abstract Shape -> Concrete Kernel Weights (b1, b2, b3)
     // Shape A (0-1): 0 = Outer Ring Dominant, 1 = Inner Ring Dominant
@@ -78,9 +79,14 @@ float kernel(float r, float R_actual, vec4 genome_1) {
     float a3 = 0.85;
     
     // Widths (Standardized for stability)
-    float w1 = 0.15;
-    float w2 = 0.20;
-    float w3 = 0.15;
+    // Widths (Modulated by Ring Width Gene)
+    // Base: 0.15, 0.20, 0.15
+    // Modulator: (0.5 + ring_width * 1.5) -> [0.5, 2.0]x Base
+    float w_mod = 0.5 + ring_width * 1.5;
+    
+    float w1 = 0.15 * w_mod;
+    float w2 = 0.20 * w_mod;
+    float w3 = 0.15 * w_mod;
     
     // Normalize distance by Species Radius
     float norm_r = r / R_actual;

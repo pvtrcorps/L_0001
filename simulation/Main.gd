@@ -15,18 +15,18 @@ var tooltip_label
 var ui_schema = {
 	"Simulation": [
 		["dt", "Time Step (dt)", 0.05, 1.0, 0.01],
-		["init_density", "Initial Density", 0.1, 0.8, 0.01],
+		["init_density", "Initial Density", 0.0, 1.0, 0.01],
 		["init_clusters", "Initial Clusters", 4.0, 64.0, 1.0]
 	],
 	"Kernel Geometry": [
-		["R", "Kernel Base Radius (R)", 8.0, 30.0, 1.0]
+		["R", "Kernel Base Radius (R)", 8.0, 16.0, 1.0]
 	],
 	"Flow Physics": [
-		["temperature", "Temperature (s)", 0.0, 3.0, 0.05],
-		["theta_A", "Global Density Mult", 0.1, 5.0, 0.1],
+		["temperature", "Temperature (s)", 0.0, 1.0, 0.05],
+		["theta_A", "Global Density Mult", 0.1, 10.0, 0.1],
 		["alpha_n", "Repulsion Sharpness (n)", 1.0, 8.0, 0.1],
 		["beta_selection", "Selection Pressure (β)", 0.0, 3.0, 0.1],
-		["flow_speed", "Flow Speed", 1.0, 100.0, 0.5]
+		["flow_speed", "Flow Speed", 1.0, 5.0, 0.5]
 	],
 	"Chemical Signal": [
 		["signal_diff", "Diffusion Rate", 0.0, 10.0, 0.1],

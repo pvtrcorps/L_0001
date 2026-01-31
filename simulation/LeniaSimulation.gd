@@ -26,8 +26,8 @@ var params = {
 	"temperature": 0.65,   # Advection diffusion (s). Paper default: 0.65
 	"identity_thr": 0.2,   # Difference to be considered enemy (used in localized kernel if implemented)
 	"colonize_thr": 0.15,  # Mass needed to resist invasion
-	"theta_A": 1.0,        # Global Density Multiplier
-	"alpha_n": 0.0,        # Repulsion Sharpness
+	"theta_A": 5.0,        # Global Density Multiplier
+	"alpha_n": 1.0,        # Repulsion Sharpness
 	
 	# Signal Layer
 	"signal_diff": 1.0,    # Diffusion Rate

@@ -118,6 +118,13 @@ var analysis_frame_count := 0
 var last_analysis_bytes: PackedByteArray
 var last_species_list = []
 
+# Async Readback State
+var stats_pending_frame := -1
+var analysis_pending_frame := -1
+var stats_interval := 10
+var analysis_interval := 30
+
+
 # Camera state delegated to SimulationCamera
 # var camera_pos := Vector2(0.0, 0.0)
 # var camera_zoom := 1.0
@@ -161,19 +168,17 @@ func _process(_delta):
 		_update_ubo()
 		_dispatch_step()
 	
-	# 2. Performance Counters & Throttled Readbacks
-	stats_frame_count += 1
-	if stats_frame_count >= 10:
-		stats_frame_count = 0
-		# Run Stats Pass ONLY when needed
-		_dispatch_stats()
+	# 2. Async Stats Readback
+	# Check if we have a pending stats request that is old enough (2 frames latency)
+	if stats_pending_frame != -1 and Engine.get_process_frames() >= stats_pending_frame + 2:
 		var bytes = rd.buffer_get_data(stats_buffer)
-		if bytes.size() >= 648: # Updated size check
+		stats_pending_frame = -1 # Reset
+		
+		if bytes.size() >= 648:
 			var ints = bytes.to_int32_array()
 			var total_mass = float(ints[0]) / 1000.0
 			var population = ints[1]
 			
-			# Parse histograms (16 genes * 10 bins)
 			var histograms = []
 			for g in range(16):
 				var bins = []
@@ -181,18 +186,35 @@ func _process(_delta):
 					bins.append(ints[2 + g * 10 + b])
 				histograms.append(bins)
 			emit_signal("stats_updated", total_mass, population, histograms)
+
+	# Schedule new stats dispatch if not pending and interval met
+	stats_frame_count += 1
+	if stats_pending_frame == -1 and stats_frame_count >= stats_interval:
+		stats_frame_count = 0
+		_dispatch_stats()
+		stats_pending_frame = Engine.get_process_frames()
 	
-	analysis_frame_count += 1
-	if analysis_frame_count >= 30:
-		analysis_frame_count = 0
-		# Run Analysis Pass ONLY when needed
-		_dispatch_analysis()
+	# 3. Async Analysis Readback
+	if analysis_pending_frame != -1 and Engine.get_process_frames() >= analysis_pending_frame + 2:
 		var bytes = rd.buffer_get_data(analysis_buffer)
+		analysis_pending_frame = -1
+		
 		if bytes.size() >= 294912:
 			last_analysis_bytes = bytes
-			var species_list = tracker.find_species(bytes)
-			last_species_list = species_list
-			emit_signal("species_list_updated", species_list)
+			# Post-process on a thread to avoid CPU spike
+			WorkerThreadPool.add_task(func():
+				var species_list = tracker.find_species(bytes)
+				# Defer the UI update back to main thread
+				call_deferred("_update_species_list", species_list)
+			)
+
+	if analysis_pending_frame == -1:
+		analysis_frame_count += 1
+	
+	if analysis_pending_frame == -1 and analysis_frame_count >= analysis_interval:
+		analysis_frame_count = 0
+		_dispatch_analysis()
+		analysis_pending_frame = Engine.get_process_frames()
 	
 	# Update Display Material
 	if display_material:
@@ -216,6 +238,10 @@ func _process(_delta):
 		display_material.set_shader_parameter("camera_pos", camera.camera_pos)
 		display_material.set_shader_parameter("camera_zoom", camera.camera_zoom)
 		display_material.set_shader_parameter("tex_genome_ext", texture_rd_genome_ext)
+
+func _update_species_list(species_list):
+	last_species_list = species_list
+	emit_signal("species_list_updated", species_list)
 
 func _update_ubo():
 	# UBO layout: Must be carefully aligned to vec4 (16 bytes)

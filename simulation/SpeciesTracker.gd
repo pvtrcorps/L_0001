@@ -46,10 +46,11 @@ class Species:
 	var color: Color
 	var name: String = "Unknown"
 	
-	func add_sample(sample_genes: Array, m: float):
+	func add_sample(sample_genes: PackedFloat32Array, m: float):
 		area += 1
 		mass += m
 		
+		# Direct index access for speed
 		genes_sum["mu"] += sample_genes[G_MU]
 		genes_sum["sigma"] += sample_genes[G_SIGMA]
 		genes_sum["radius"] += sample_genes[G_RADIUS]
@@ -73,13 +74,12 @@ class Species:
 	func finalize():
 		if area == 0: return
 		var n = float(area)
+		var inv_n = 1.0 / n
 		
 		for k in genes_sum.keys():
-			genes[k] = genes_sum[k] / n
+			genes[k] = genes_sum[k] * inv_n
 		
 		# Calculate Color based on Hue Emission
-		# If emission is low, fallback to physiology colors?
-		# Actually, let's use Emission Hue primarily as it's the "Signal" color
 		var hues = genes["emission_hue"]
 		var sat = 0.8
 		var val = 1.0
@@ -156,51 +156,60 @@ static func get_gene_distance(g1: Dictionary, g2: Dictionary) -> float:
 	d += hd * 2.0
 	return d
 
+# Reused buffer to avoid allocation in inner loops
+var _temp_gene_buffer := PackedFloat32Array()
+
+func _init():
+	_temp_gene_buffer.resize(16)
+
 func find_species(byte_data: PackedByteArray) -> Array:
 	if byte_data.size() < GRID_SIZE * GRID_SIZE * CELL_FLOATS * 4:
 		return []
 		
+	# Conversion to float array is still somewhat expensive but necessary
+	# Ideally we would read bytes directly but GDScript is slow at that
 	var floats = byte_data.to_float32_array()
 	var species_list: Array[Species] = []
 	var species_genes: Array[PackedFloat32Array] = []
 	
+	# Pre-cache
 	var count = GRID_SIZE * GRID_SIZE
+	var floats_size = floats.size()
+	
 	for i in range(count):
 		var base = i * CELL_FLOATS
+		if base >= floats_size: break
+		
 		var m = floats[base]
 		if m <= MASS_THRESHOLD: continue
 		
-		# Collect all 16 genes
-		var cg = PackedFloat32Array()
-		cg.resize(16)
+		# Reuse buffer instead of allocating new PackedFloat32Array
 		for k in range(16):
-			cg[k] = floats[base + 1 + k]
+			_temp_gene_buffer[k] = floats[base + 1 + k]
 			
 		var best_match_idx = -1
 		var min_dist = GENE_SIMILARITY_THRESHOLD
 		
+		# Optimization: only check against existing species genes
 		for j in range(species_genes.size()):
-			var d = get_fast_dist(species_genes[j], cg)
+			var d = get_fast_dist(species_genes[j], _temp_gene_buffer)
 			if d < min_dist:
 				min_dist = d
 				best_match_idx = j
-				if d < 0.05: break
+				if d < 0.05: break # Optimization: Early exit if very close
 		
 		if best_match_idx != -1:
-			# Convert PackedFloat32Array to Array for helper
-			var arr = []
-			for k in range(16): arr.append(cg[k])
-			species_list[best_match_idx].add_sample(arr, m)
+			species_list[best_match_idx].add_sample(_temp_gene_buffer, m)
 		elif species_list.size() < 64:
 			var s = Species.new()
 			s.id = species_list.size() + 1
 			
-			var arr = []
-			for k in range(16): arr.append(cg[k])
-			s.add_sample(arr, m)
+			# MUST Copy the buffer here because we store it
+			var new_gene_snapshot = _temp_gene_buffer.duplicate()
+			s.add_sample(new_gene_snapshot, m)
 			
 			species_list.append(s)
-			species_genes.append(cg)
+			species_genes.append(new_gene_snapshot)
 			
 	# Finalize
 	var final_list = []

@@ -102,7 +102,7 @@ void main() {
     vec4 finalGenome2 = texture(tex_genome_ext, uv); 
     
     if (packed != 0) {
-        uint winner_idx = packed & 0xFFFFFu; 
+        uint winner_idx = packed & 0xFFFFFFu; 
         
         ivec2 res = ivec2(p.u_res);
         ivec2 winner_coords = ivec2(winner_idx % res.x, winner_idx / res.x);

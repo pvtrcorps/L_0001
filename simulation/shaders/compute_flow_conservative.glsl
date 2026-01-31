@@ -253,19 +253,30 @@ void main() {
         
         // WINNER TRACKING (For Genome Inheritance)
         // We pack (Mass Contribution << 20) | (Source Index)
-        // Mass Contribution uses 12 bits (Max 4096 -> ~40.0 mass units)
-        // Source Index uses 20 bits (Max 1M -> 1024x1024 resolution)
         
         uint src_idx = uint(uv_i.y) * uint(p.u_res.x) + uint(uv_i.x);
-        // Ensure index fits in 20 bits
         src_idx = src_idx & 0xFFFFFu; 
         
-        // Calculate contribution for each neighbor (scaled by 100 for precision)
-        // Max mass 40.0 * 100 = 4000 < 4096 (12 bits)
-        uint m00 = uint(clamp(myMass * w00 * 100.0, 0.0, 40.0));
-        uint m10 = uint(clamp(myMass * w10 * 100.0, 0.0, 40.0));
-        uint m01 = uint(clamp(myMass * w01 * 100.0, 0.0, 40.0));
-        uint m11 = uint(clamp(myMass * w11 * 100.0, 0.0, 40.0));
+        // "No Mass Without Representation"
+        // If we send mass (weighted amount > 0), we MUST register at least 1 unit of claim.
+        // Otherwise, the mass arrives anonymously and becomes a "Null Species" (Ghost).
+        
+        // Threshold check for atomicAdd was: amount * wXX
+        // We replicate that logic for the tracker:
+        
+        uint a00 = uint(float(amount) * w00);
+        uint a10 = uint(float(amount) * w10);
+        uint a01 = uint(float(amount) * w01);
+        uint a11 = uint(float(amount) * w11);
+        
+        // Calculate tracker score (still scaled for competition), but floor clamped to 1 if mass exists.
+        // Scale 2000.0 is arbitrary, just needs to be consistent.
+        // If a00 > 0 (Mass added), then m00 MUST be >= 1.
+        
+        uint m00 = (a00 > 0) ? max(1u, uint(clamp(myMass * w00 * 2000.0, 0.0, 4095.0))) : 0u;
+        uint m10 = (a10 > 0) ? max(1u, uint(clamp(myMass * w10 * 2000.0, 0.0, 4095.0))) : 0u;
+        uint m01 = (a01 > 0) ? max(1u, uint(clamp(myMass * w01 * 2000.0, 0.0, 4095.0))) : 0u;
+        uint m11 = (a11 > 0) ? max(1u, uint(clamp(myMass * w11 * 2000.0, 0.0, 4095.0))) : 0u;
         
         if (m00 > 0) imageAtomicMax(img_winner_tracker, c00, (m00 << 20u) | src_idx);
         if (m10 > 0) imageAtomicMax(img_winner_tracker, c10, (m10 << 20u) | src_idx);

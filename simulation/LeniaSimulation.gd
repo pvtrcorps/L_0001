@@ -310,7 +310,7 @@ func _dispatch_step():
 	rd.compute_list_dispatch(compute_list_flow, wg_x, wg_y, 1)
 	rd.compute_list_end()
 	
-	# rd.barrier(RenderingDevice.BARRIER_MASK_COMPUTE) # barrier automatically inserted
+	rd.barrier(RenderingDevice.BARRIER_MASK_COMPUTE) # barrier automatically inserted
 	
 	# 4. Normalize Pass
 	var key_norm = "norm_" + str(ping_pong)
@@ -684,7 +684,7 @@ func _create_set_analysis(tex_state: RID, tex_genome: RID, tex_genome_ext: RID) 
 	var u_state = RDUniform.new()
 	u_state.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 	u_state.binding = 1
-	u_state.add_id(sampler_linear)
+	u_state.add_id(sampler_nearest) # Changed to NEAREST to align with Grid
 	u_state.add_id(tex_state)
 	
 	var u_genome = RDUniform.new()

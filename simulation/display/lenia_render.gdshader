@@ -132,7 +132,6 @@ void fragment() {
     float g_radius = rad_visc.x;
     // float g_width = width_radius.x;
     
-
     vec4 genome_ext = texture(tex_genome_ext, uv);
     vec2 aff_rep = unpack2(genome_ext.r);
     float g_affinity = aff_rep.x;

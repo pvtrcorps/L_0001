@@ -64,6 +64,14 @@ void main() {
         density = smoothstep(0.4, 0.2, d);
     }
     
+
+    if (density < 0.0001) {
+        imageStore(img_state, uv_i, vec4(0.0));
+        imageStore(img_genome, uv_i, vec4(0.0));
+        imageStore(img_genome_ext, uv_i, vec4(0.0));
+        return;
+    }
+
     // 2. Gene Generation (Species Seed)
     vec2 species_seed = vec2(cell_x, cell_y) + p.u_seed;
     

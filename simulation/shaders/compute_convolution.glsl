@@ -121,6 +121,15 @@ void main() {
     // 2. Read Genome 2 (Behavior/Senses)
     vec4 g2 = texture(tex_genome_ext, uv);
     
+    // === VOID CHECK ===
+    // If no genes are present, this is a Vacuum/Void pixel.
+    // It has NO interaction radius and NO growth potential.
+    // We return Neutral Potential (U=0.0) so species can flow into it if their potential < 0
+    if (dot(g1, g1) < 0.0001) {
+        imageStore(img_potential, uv_i, vec4(0.0));
+        return;
+    }
+    
     // Unpack Key Genes
     vec2 mu_sigma = unpack2(g1.r);
     float g_mu = mu_sigma.x;

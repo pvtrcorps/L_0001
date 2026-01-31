@@ -110,6 +110,36 @@ void main() {
         
         finalGenome1 = texture(tex_old_genome, winner_uv);
         finalGenome2 = texture(tex_genome_ext, winner_uv);
+        
+        finalGenome1 = texture(tex_old_genome, winner_uv);
+        finalGenome2 = texture(tex_genome_ext, winner_uv);
+        
+        // ZOMBIE CHECK:
+        // 1. Raw Null Check (Uninitialized Memory / Void)
+        bool is_raw_null = dot(finalGenome1, finalGenome1) < 0.0001;
+        
+        // 2. Trait Null Check (Packed Zeroes)
+        // If a species has 0.0 traits, it packs to non-zero floats (approx 2.0).
+        // We must unpack to check if it's physically inert.
+        vec2 t_r = unpack2(finalGenome1.r); // Mu, Sigma
+        vec2 t_g = unpack2(finalGenome1.g); // Radius, Visc
+        vec2 t_a = unpack2(finalGenome1.a); // ShapeC, Growth
+        
+        // If core physiology (Mu, Radius, Growth) is 0, the species is dead/inert.
+        // We sum them up to check for "Ghost" signature.
+        float trait_sum = t_r.x + t_r.y + t_g.x + t_a.y; 
+        
+        if (is_raw_null || trait_sum < 0.01) {
+             mass = 0.0;
+             finalGenome1 = vec4(0.0);
+             finalGenome2 = vec4(0.0);
+        }
+    } else {
+        // No genome provider claimed this pixel (and tracking is robust now).
+        // If we end up here, it's true orphan dust. Kill it.
+        mass = 0.0;
+        finalGenome1 = vec4(0.0);
+        finalGenome2 = vec4(0.0);
     }
     
     // Write BOTH genomes to new generation (Move identity)
@@ -141,5 +171,11 @@ void main() {
     }
     
     // Store final state (Mass, Velocity, Debug/Extra)
-    imageStore(img_new_state, uv_i, vec4(finalMass, velocity, 0.0));
+    if (finalMass < 0.0001) {
+        imageStore(img_new_state, uv_i, vec4(0.0));
+        imageStore(img_new_genome, uv_i, vec4(0.0));
+        imageStore(img_new_genome_ext, uv_i, vec4(0.0));
+    } else {
+        imageStore(img_new_state, uv_i, vec4(finalMass, velocity, 0.0));
+    }
 }

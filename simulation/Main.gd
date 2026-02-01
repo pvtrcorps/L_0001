@@ -14,24 +14,31 @@ var tooltip_label
 # New Parametric Lenia parameters
 var ui_schema = {
 	"Simulation": [
-		["dt", "Time Step (dt)", 0.05, 1.0, 0.01],
-		["init_density", "Initial Density", 0.1, 0.8, 0.01],
-		["init_clusters", "Initial Clusters", 4.0, 64.0, 1.0]
+		["dt", "Time Step (dt)", 0.01, 1.0, 0.01],
+		["init_density", "Initial Density", 0.0, 1.0, 0.01],
+		["init_clusters", "Initial Clusters", 1.0, 64.0, 1.0]
 	],
 	"Kernel Geometry": [
-		["R", "Kernel Base Radius (R)", 8.0, 30.0, 1.0]
+		["R", "Kernel Base Radius (R)", 8.0, 16.0, 1.0]
 	],
 	"Flow Physics": [
 		["temperature", "Temperature (s)", 0.0, 3.0, 0.05],
-		["theta_A", "Global Density Mult", 0.1, 5.0, 0.1],
-		["alpha_n", "Repulsion Sharpness (n)", 1.0, 8.0, 0.1],
+		["theta_A", "Global Density Mult", 0.1, 10.0, 0.1],
+		["alpha_n", "Repulsion Sharpness (n)", 0.0, 2.0, 0.1],
 		["beta_selection", "Selection Pressure (β)", 0.0, 3.0, 0.1],
-		["flow_speed", "Flow Speed", 1.0, 100.0, 0.5]
+		["flow_speed", "Flow Speed", 1.0, 10.0, 0.5]
 	],
 	"Chemical Signal": [
 		["signal_diff", "Diffusion Rate", 0.0, 10.0, 0.1],
-		["signal_decay", "Decay Rate", 0.0, 1.0, 0.01],
-		["signal_advect", "Advection Weight", 0.0, 1.0, 0.01]
+		["signal_decay", "Decay Rate", 0.0, 1.0, 0.001],
+		["signal_advect", "Advection Weight", 0.0, 1.0, 0.01],
+		["signal_force_strength", "Signal Pull Force", 0.0, 100.0, 0.5],
+		["signal_emission_strength", "Signal Emission (Volume)", 0.0, 20.0, 0.1]
+	],
+	"Wind / Atmosphere": [
+		["wind_scale", "Wind Scale", 0.1, 10.0, 0.1],
+		["wind_strength", "Wind Strength", 0.0, 5.0, 0.05],
+		["wind_speed", "Wind Speed", 0.0, 2.0, 0.05]
 	],
 	"Gene Pools (Init)": [
 		["g_mu_min", "Archetype (Mu) Min", 0.0, 1.0, 0.05],
@@ -120,6 +127,8 @@ func _build_ui():
 		"signal_diff": "Diffusion Rate. How fast the chemical signal spreads to neighboring cells.",
 		"signal_decay": "Decay Rate. How fast the chemical signal dissipates over time.",
 		"signal_advect": "Advection Weight. How much the chemical signal is dragged by the mass flow.",
+		"signal_force_strength": "Signal Pull Force. Global Multiplier for the attraction strength of signals.",
+		"signal_emission_strength": "Signal Emission (Volume). Global Multiplier for how much signal creatures produce.",
 		"beta_selection": "Selection Pressure (β). Controls genome competition strength. 0.0=mass only, 1.0=balanced, 2.0=highly competitive.",
 		
 		# Genes

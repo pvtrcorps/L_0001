@@ -30,6 +30,12 @@ layout(set = 0, binding = 0, std430) buffer Params {
     vec2 r_affinity; vec2 r_repulsion; vec2 r_density_tol; vec2 r_mobility;
     // Block D: Senses
     vec2 r_secretion; vec2 r_sensitivity; vec2 r_emission_hue; vec2 r_detection_hue;
+    
+    // Wind / Atmosphere
+    float u_time;
+    float u_wind_scale;
+    float u_wind_strength;
+    float u_wind_speed;
 } p;
 
 layout(set = 0, binding = 1, rgba32f) uniform image2D img_state;

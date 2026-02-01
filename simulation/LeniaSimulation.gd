@@ -26,22 +26,31 @@ var params = {
 	"temperature": 0.65,   # Advection diffusion (s). Paper default: 0.65
 	"identity_thr": 0.2,   # Difference to be considered enemy (used in localized kernel if implemented)
 	"colonize_thr": 0.15,  # Mass needed to resist invasion
-	"theta_A": 1.0,        # Global Density Multiplier
+	"theta_A": 5.0,        # Global Density Multiplier
 	"alpha_n": 0.0,        # Repulsion Sharpness
 	
 	# Signal Layer
 	"signal_diff": 1.0,    # Diffusion Rate
-	"signal_decay": 0.1,   # Decay Rate
+	"signal_decay": 0.001,   # Decay Rate
 	"signal_advect": 1.0,  # Signal advection weight [0-1] (how much signals follow mass flow)
 	"flow_speed": 1.0,     # Multiplier for advection force (decopuled from dt)
 	
 	"beta_selection": 1.0, # Selection pressure for negotiation rule
 	
+	# Wind / Atmosphere
+	"wind_scale": 2.0,     # Noise scale
+	"wind_strength": 2.0,  # Wind force multiplier
+	"wind_speed": 0.05,     # Animation speed
+	
+	# Signal Advanced
+	"signal_force_strength": 20.0,   # Multiplier for signal gradient force
+	"signal_emission_strength": 1.0, # Multiplier for signal secretion quantity
+	
 	# === GENE RANGES (16 GENES x 2 MIN/MAX) ===
 	# BLOCK A: Physiology (Body)
 	"g_mu_min": 0.0, "g_mu_max": 1.0,      # 1. Growth Target Density
 	"g_sigma_min": 0.0, "g_sigma_max": 1.0,# 2. Growth Stability
-	"g_radius_min": 0.0, "g_radius_max": 1.0,# 3. Size (Scale)
+	"g_radius_min": 0.75, "g_radius_max": 1.0,# 3. Size (Scale)
 	"g_viscosity_min": 0.0, "g_viscosity_max": 1.0, # 4. Viscosity (Drag/Friction)
 	
 	# BLOCK B: Morphology (Shape)
@@ -51,7 +60,7 @@ var params = {
 	"g_inertia_min": 0.0, "g_inertia_max": 1.0, # 8. Inertial Mass
 	
 	# BLOCK C: Social & Motor (Mind)
-	"g_affinity_min": 0.0, "g_affinity_max": 1.0, # 9. Cohesion
+	"g_affinity_min": 1.0, "g_affinity_max": 1.0, # 9. Cohesion
 	"g_repulsion_min": 0.0, "g_repulsion_max": 1.0, # 10. Spacing
 	"g_density_tol_min": 0.0, "g_density_tol_max": 1.0, # 11. Overcrowding Tol
 	"g_mobility_min": 0.0, "g_mobility_max": 1.0, # 12. Speed Base
@@ -123,6 +132,7 @@ var stats_pending_frame := -1
 var analysis_pending_frame := -1
 var stats_interval := 10
 var analysis_interval := 30
+var params_time := 0.0
 
 
 # Camera state delegated to SimulationCamera
@@ -157,12 +167,15 @@ func _ready():
 	
 	print("Parametric Lenia with Signaling initialized.")
 
-func _process(_delta):
+func _process(delta):
 	if not initialized or rd == null: return
 	
 	# Update random seed
 	params["seed"] = randf() * 1000.0
 	
+	if not paused:
+		params_time += delta
+		
 	# 1. Update UBO
 	if not paused:
 		_update_ubo()
@@ -246,7 +259,7 @@ func _update_species_list(species_list):
 func _update_ubo():
 	# UBO layout: Must be carefully aligned to vec4 (16 bytes)
 	# Matches std430 layout in shaders (Params block)
-	# Total Floats: 16 (Globals) + 32 (Gene Ranges) = 48 floats
+	# Total Floats: 16 (Globals) + 32 (Gene Ranges) + 4 (Wind) = 52 floats
 	var buffer = PackedFloat32Array([
 		# Chunk 0 (0-16 bytes): Vec2 res + float dt + float seed
 		params["res_x"], params["res_y"], params["dt"], params["seed"],
@@ -275,7 +288,13 @@ func _update_ubo():
 		
 		# Block D: Senses (4 Genes)
 		params["g_secretion_min"], params["g_secretion_max"], params["g_sensitivity_min"], params["g_sensitivity_max"],
-		params["g_emission_hue_min"], params["g_emission_hue_max"], params["g_detection_hue_min"], params["g_detection_hue_max"]
+		params["g_emission_hue_min"], params["g_emission_hue_max"], params["g_detection_hue_min"], params["g_detection_hue_max"],
+		
+	# Chunk 4 (Wind/Atmosphere) - Appended to end
+		params_time, params["wind_scale"], params["wind_strength"], params["wind_speed"],
+		
+		# Chunk 5 (Signal Extras) - [NEW]
+		params["signal_force_strength"], params["signal_emission_strength"], 0.0, 0.0
 	])
 	
 	var bytes = buffer.to_byte_array()
@@ -425,9 +444,9 @@ func _dispatch_init():
 	ping_pong = false
 
 func _create_uniforms():
-	# UBO: 48 floats * 4 bytes = 192 bytes
+	# UBO: 52 floats * 4 bytes = 208 bytes
 	var buffer = PackedFloat32Array()
-	buffer.resize(48)
+	buffer.resize(56)
 	var bytes = buffer.to_byte_array()
 	ubo = rd.storage_buffer_create(bytes.size(), bytes)
 	

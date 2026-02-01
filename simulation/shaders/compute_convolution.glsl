@@ -29,6 +29,18 @@ layout(set = 0, binding = 0, std430) buffer Params {
     vec2 r_affinity; vec2 r_repulsion; vec2 r_density_tol; vec2 r_mobility;
     // Block D: Senses
     vec2 r_secretion; vec2 r_sensitivity; vec2 r_emission_hue; vec2 r_detection_hue;
+    
+    // Wind / Atmosphere
+    float u_time;
+    float u_wind_scale;
+    float u_wind_strength;
+    float u_wind_speed;
+    
+    // Signal Extras
+    float u_signal_force_strength;
+    float u_signal_emission_strength;
+    float u_pad1;
+    float u_pad2;
 } p;
 
 layout(set = 0, binding = 1) uniform sampler2D tex_state;
@@ -157,6 +169,7 @@ void main() {
     maxR = min(maxR, 60); 
     
     float sum = 0.0;
+    float sumSignal = 0.0;
     float totalWeight = 0.0;
     
     for (int dy = -maxR; dy <= maxR; dy++) {
@@ -171,13 +184,28 @@ void main() {
                 ivec2 neighbor_coord = (uv_i + ivec2(dx, dy) + res_i) % res_i;
                 float neighborMass = texelFetch(tex_state, neighbor_coord, 0).r;
                 
+                // Fetch Signal Vector
+                vec3 neighborSignal = texelFetch(tex_signal, neighbor_coord, 0).rgb;
+                // Compute Match
+                float signalMatch = dot(neighborSignal, myDetector);
+                
+                // NEW LOGIC: Like Attracts, Unlike Repells
+                // Score = 2.0 * Match - TotalIntensity
+                // If Match == Total (Pure same color) -> 2*1 - 1 = +1 (Attract)
+                // If Match == 0 (Pure different color) -> 0 - 1 = -1 (Repel)
+                float totalIntensity = dot(neighborSignal, vec3(1.0)); // L1 Norm approx
+                float signedScore = 2.0 * signalMatch - totalIntensity;
+                
                 sum += neighborMass * w;
+                sumSignal += signedScore * w;
                 totalWeight += w;
             }
         }
     }
     
     float U_raw = (totalWeight > 0.0) ? sum / totalWeight : 0.0;
+    // Normalized Convolved Signal
+    float U_signal_smooth = (totalWeight > 0.0) ? sumSignal / totalWeight : 0.0;
     
     // === GROWTH G(U) ===
     // Use Species Specific Mu and Sigma
@@ -188,5 +216,5 @@ void main() {
     float exp_term = exp(-0.5 * (diff * diff) / max(sigma * sigma, 0.0001));
     float U_growth = 2.0 * exp_term - 1.0; 
     
-    imageStore(img_potential, uv_i, vec4(U_growth, 0.0, 0.0, U_signal));
+    imageStore(img_potential, uv_i, vec4(U_growth, 0.0, 0.0, U_signal_smooth));
 }

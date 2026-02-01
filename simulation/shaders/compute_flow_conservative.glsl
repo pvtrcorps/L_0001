@@ -30,6 +30,18 @@ layout(set = 0, binding = 0, std430) buffer Params {
     vec2 r_affinity; vec2 r_repulsion; vec2 r_density_tol; vec2 r_mobility;
     // Block D: Senses
     vec2 r_secretion; vec2 r_sensitivity; vec2 r_emission_hue; vec2 r_detection_hue;
+    
+    // Wind / Atmosphere
+    float u_time;
+    float u_wind_scale;
+    float u_wind_strength;
+    float u_wind_speed;
+    
+    // Signal Extras
+    float u_signal_force_strength;
+    float u_signal_emission_strength;
+    float u_pad1;
+    float u_pad2;
 } p;
 
 layout(set = 0, binding = 1) uniform sampler2D tex_state;
@@ -188,7 +200,7 @@ void main() {
     // APPLY SENSITIVITY
     // Combine Growth Gradient + Signal Gradient
     // Signal Advect controls global weight, Sensitivity controls per-species gain
-    vec2 totalAttraction = gradU + gradSignal * p.u_signal_advect * (g_sensitivity * 3.0);
+    vec2 totalAttraction = gradU + gradSignal * p.u_signal_advect * (g_sensitivity * p.u_signal_force_strength);
     
     // C. Density Gradient (Repulsion)
     // High density pressure

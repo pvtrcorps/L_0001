@@ -30,6 +30,18 @@ layout(set = 0, binding = 0, std430) buffer Params {
     vec2 r_affinity; vec2 r_repulsion; vec2 r_density_tol; vec2 r_mobility;
     // Block D: Senses
     vec2 r_secretion; vec2 r_sensitivity; vec2 r_emission_hue; vec2 r_detection_hue;
+    
+    // Wind / Atmosphere
+    float u_time;
+    float u_wind_scale;
+    float u_wind_strength;
+    float u_wind_speed;
+    
+    // Signal Extras
+    float u_signal_force_strength;
+    float u_signal_emission_strength;
+    float u_pad1;
+    float u_pad2;
 } p;
 
 layout(set = 0, binding = 1, r32ui) uniform uimage2D img_mass_accum;
@@ -146,7 +158,7 @@ void main() {
     imageStore(img_new_genome, uv_i, finalGenome1);
     imageStore(img_new_genome_ext, uv_i, finalGenome2);
     
-    // 4. Secretion Logic using Real Genes (Genome 2)
+    // 4. Secretion & Consumption Logic using Real Genes (Genome 2)
     // Secretion: Ext B.x
     vec2 sec_sens = unpack2(finalGenome2.b);
     float g_secretion = sec_sens.x;
@@ -155,19 +167,29 @@ void main() {
     vec2 hues = unpack2(finalGenome2.a);
     float g_emission_hue = hues.x;
     
-    // 5. Final Mass & Emission
+    // 5. Final Mass, Emission & Consumption
     float finalMass = mass;
     
     if (finalMass > 0.05) {
         vec3 emittedColor = HueToRGB(g_emission_hue);
         vec4 currentSignal = imageLoad(img_new_signal, uv_i); 
         
-        // Add emission
-        vec3 addedSignal = emittedColor * (finalMass * g_secretion * p.u_dt * 0.5);
-        vec3 nextSignal = currentSignal.rgb + addedSignal;
+        // A. Consumption (Grazing)
+        // Creatures consume signal proportional to their mass * dt
+        // This prevents infinite accumulation and creates local scarcity
+        vec3 consumed = currentSignal.rgb * (finalMass * 0.5 * p.u_dt);
+        vec3 signalAfterConsumption = currentSignal.rgb - consumed;
         
-        // Decay/Clamp
-        imageStore(img_new_signal, uv_i, vec4(nextSignal, 0.0));
+        // B. Secretion (Emission)
+        // Add new signal
+        vec3 addedSignal = emittedColor * (finalMass * g_secretion * p.u_dt * p.u_signal_emission_strength);
+        vec3 nextSignal = signalAfterConsumption + addedSignal;
+        
+        // Clamp
+        imageStore(img_new_signal, uv_i, vec4(max(vec3(0.0), nextSignal), 0.0));
+    } else {
+        // Even if no mass here, signal exists but no consumption/secretion happens
+        // (Decay and Diffusion handle the rest in Signal Shader)
     }
     
     // Store final state (Mass, Velocity, Debug/Extra)

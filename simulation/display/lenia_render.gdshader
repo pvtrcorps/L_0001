@@ -108,17 +108,13 @@ void fragment() {
     
     // Apply Mass and Brightness
     // Softened brightness curve for more organic look
-    float brightness = texture(tex_state, uv).r * 3.0; // Reduced from 5.0 to avoid instant saturation
+    float brightness = texture(tex_state, uv).r * 2.0; // Reduced from 5.0 to avoid instant saturation
     vec3 col = col_base * brightness;
     
-    // Soften the low-mass cutoff
-    // Was smoothstep(0.0, 0.05, mass) -> Hard cutoff
-    // Now smoothstep(0.0, 0.15, mass) -> Softer fade out for "aura"
-    col *= smoothstep(0.0, 0.15, mass);
     
     // Signal layer visualization (Full RGB)
     // Additive blending for glow
-    vec3 signal_col = signal * 2.0; 
+    vec3 signal_col = signal * 0.5; 
     col += signal_col;
     
     // Highlight Logic
@@ -163,9 +159,9 @@ void fragment() {
     // Lower gamma (< 1.0) = Higher contrast.
     col = pow(col, vec3(0.9));
     
-    if (mass < 0.01 && length(signal) < 0.01) {
-        col = vec3(0.0);
-    }
+    //if (mass < 0.01 && length(signal) < 0.01) {
+    //    col = vec3(0.0);
+    //}
     
     COLOR = vec4(col, 1.0);
 }

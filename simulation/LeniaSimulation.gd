@@ -42,13 +42,13 @@ var params = {
 	"g_mu_min": 0.0, "g_mu_max": 1.0,      # 1. Growth Target Density
 	"g_sigma_min": 0.0, "g_sigma_max": 1.0,# 2. Growth Stability
 	"g_radius_min": 0.0, "g_radius_max": 1.0,# 3. Size (Scale)
-	"g_viscosity_min": 0.0, "g_viscosity_max": 1.0, # 4. Viscosity (Mass/Inertia)
+	"g_viscosity_min": 0.0, "g_viscosity_max": 1.0, # 4. Viscosity (Drag/Friction)
 	
 	# BLOCK B: Morphology (Shape)
 	"g_shape_a_min": 0.0, "g_shape_a_max": 1.0, # 5. Ring Balance
 	"g_shape_b_min": 0.0, "g_shape_b_max": 1.0, # 6. Complexity
 	"g_shape_c_min": 0.0, "g_shape_c_max": 1.0, # 7. Ring Spacing
-	"g_growth_rate_min": 0.0, "g_growth_rate_max": 1.0, # 8. Vitality
+	"g_inertia_min": 0.0, "g_inertia_max": 1.0, # 8. Inertial Mass
 	
 	# BLOCK C: Social & Motor (Mind)
 	"g_affinity_min": 0.0, "g_affinity_max": 1.0, # 9. Cohesion
@@ -267,7 +267,7 @@ func _update_ubo():
 		
 		# Block B: Morphology (4 Genes)
 		params["g_shape_a_min"], params["g_shape_a_max"], params["g_shape_b_min"], params["g_shape_b_max"],
-		params["g_shape_c_min"], params["g_shape_c_max"], params["g_growth_rate_min"], params["g_growth_rate_max"],
+		params["g_shape_c_min"], params["g_shape_c_max"], params["g_inertia_min"], params["g_inertia_max"],
 		
 		# Block C: Social / Motor (4 Genes)
 		params["g_affinity_min"], params["g_affinity_max"], params["g_repulsion_min"], params["g_repulsion_max"],

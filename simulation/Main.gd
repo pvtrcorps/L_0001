@@ -305,7 +305,7 @@ func _on_species_hovered(info):
 			
 			txt += "[Morphology]\n"
 			txt += "  Shape A/B/C: %.2f / %.2f / %.2f\n" % [info.get("shape_a", 0.0), info.get("shape_b", 0.0), info.get("shape_c", 0.0)]
-			txt += "  Growth: %.2f\n" % info.get("growth_rate", 0.0)
+			txt += "  Inertia: %.2f\n" % info.get("inertia", 0.0)
 			
 			txt += "[Behavior]\n"
 			txt += "  Aff: %.2f | Rep: %.2f\n" % [info.get("affinity", 0.0), info.get("repulsion", 0.0)]

@@ -25,7 +25,7 @@ layout(set = 0, binding = 0, std430) buffer Params {
     // Block A: Physiology
     vec2 r_mu; vec2 r_sigma; vec2 r_radius; vec2 r_viscosity;
     // Block B: Morphology
-    vec2 r_shape_a; vec2 r_shape_b; vec2 r_shape_c; vec2 r_growth_rate;
+    vec2 r_shape_a; vec2 r_shape_b; vec2 r_shape_c; vec2 r_inertia;
     // Block C: Social / Motor
     vec2 r_affinity; vec2 r_repulsion; vec2 r_density_tol; vec2 r_mobility;
     // Block D: Senses
@@ -202,20 +202,42 @@ void main() {
     gradA *= (0.5 + g_repulsion * 2.5);
     
     // D. Compute Velocity Field
+    // Morphology
+    vec2 shape_c_inertia = unpack2(g1.a);
+    float g_inertia = shape_c_inertia.y; // [0-1] Inertial Mass (0=Light, 1=Heavy)
+
+    // D. Compute Acceleration (Force) Field
     // alpha = (mass / theta)^n
     // APPLY DENSITY TOLERANCE: Modulates theta_A (Critical Mass)
-    // High tolerance = High Theta = Low Alpha (Less repulsion)
     float local_theta = p.u_theta_A * (0.5 + g_density_tol * 2.0);
     float alpha = pow(max(myMass, 0.0) / max(local_theta, 0.001), p.u_alpha_n);
     
-    // V = Speed * (Attraction - Alpha * Repulsion)
-    // APPLY MOBILITY
-    float speed_mult = p.u_flow_speed * (0.2 + g_mobility * 1.8);
-    vec2 vel = speed_mult * (totalAttraction - alpha * gradA);
+    // Force = Speed * (Attraction - Alpha * Repulsion)
+    // APPLY MOBILITY to Force Magnitude
+    float force_mult = p.u_flow_speed * (0.2 + g_mobility * 1.8);
+    vec2 force = force_mult * (totalAttraction - alpha * gradA);
     
-    // APPLY VISCOSITY (Drag)
-    // V_final = V * (1 - viscosity)
-    vel *= clamp(1.0 - g_viscosity * 0.9, 0.1, 1.0);
+    // === INERTIAL INTEGRATION ===
+    // 1. Read previous velocity (Momentum)
+    // Stored in .gb channels of state texture
+    vec2 old_vel = state.gb;
+    
+    // 2. Determine Responsiveness (Inverse Mass)
+    // Low Inertia (0.0) -> High Responsiveness (1.0) -> Instant Turn (Fly)
+    // High Inertia (1.0) -> Low Responsiveness (0.05) -> Drift (Vehicle/Planet)
+    float responsiveness = mix(1.0, 0.05, g_inertia);
+    
+    // 3. Integrate: V_new = V_old + Force * dt * (1/Mass)
+    // We use mix() to stabilize the acceleration, effectively: V += F * dt * R
+    // But ensuring we don't explode if F is huge.
+    vec2 integrated_vel = mix(old_vel, old_vel + force * p.u_dt, responsiveness);
+    
+    // 4. Apply Viscosity (Drag/Friction)
+    // Higher viscosity = faster loss of momentum
+    // Normalized to dt to ensure frame-rate independence
+    integrated_vel *= clamp(1.0 - g_viscosity * p.u_dt * 2.0, 0.0, 1.0);
+    
+    vec2 vel = integrated_vel;
     
     
     // === 3. Mass Advection (Scatter) ===

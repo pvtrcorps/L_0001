@@ -4,7 +4,7 @@ var gene_names = [
 	# Physiology
 	"Archetype", "Stability", "Radius", "Viscosity",
 	# Morphology
-	"Shape A", "Shape B", "Shape C", "Growth Rate",
+	"Shape A", "Shape B", "Shape C", "Inertia",
 	# Behavior
 	"Affinity", "Repulsion", "DensityTol", "Mobility",
 	# Senses

@@ -23,11 +23,10 @@ var params = {
 	"init_density": 1.0,   # Higher density for better start
 	
 	# Advanced Physics (Flow Lenia style)
-	"temperature": 0.65,   # Advection diffusion (s). Paper default: 0.65
-	"identity_thr": 0.2,   # Difference to be considered enemy (used in localized kernel if implemented)
-	"colonize_thr": 0.15,  # Mass needed to resist invasion
-	"theta_A": 5.0,        # Global Density Multiplier
-	"alpha_n": 0.0,        # Repulsion Sharpness
+	# Advanced Physics (Flow Lenia style)
+	"temperature": 0.65,   # Advection diffusion (s). Paper default: 0.65 (Currently Standard Bilinear)
+	"theta_A": 1.0,        # Global Density Multiplier. Canonical ~1.0? (Was 5.0)
+	"alpha_n": 2.0,        # Repulsion Sharpness. Canonical: 2.0. (Was 0.0)
 	
 	# Signal Layer
 	"signal_diff": 1.0,    # Diffusion Rate
@@ -271,7 +270,7 @@ func _update_ubo():
 		params["signal_advect"], params["beta_selection"], params["signal_diff"], params["signal_decay"],
 		
 		# Chunk 3 (48-64 bytes): Flow + Init Props
-		params["flow_speed"], params["init_clusters"], params["init_density"], params["colonize_thr"],
+		params["flow_speed"], params["init_clusters"], params["init_density"], 0.0,
 		
 		# 2. Gene Ranges (16 Genes * 2 values = 32 floats)
 		# Block A: Physiology (4 Genes)

@@ -135,13 +135,11 @@ void main() {
     
     // === VOID CHECK ===
     // If no genes are present, this is a Vacuum/Void pixel.
-    // It has NO interaction radius and NO growth potential.
-    // We return Neutral Potential (U=0.0) so species can flow into it if their potential < 0
     if (dot(g1, g1) < 0.0001) {
         imageStore(img_potential, uv_i, vec4(0.0));
         return;
     }
-    
+
     // Unpack Key Genes
     vec2 mu_sigma = unpack2(g1.r);
     float g_mu = mu_sigma.x;
@@ -210,6 +208,7 @@ void main() {
     // === GROWTH G(U) ===
     // Use Species Specific Mu and Sigma
     float mu = g_mu; 
+    
     float sigma = 0.001 + g_sigma * 0.2; // Scaling for stability
     
     float diff = (U_raw - mu);

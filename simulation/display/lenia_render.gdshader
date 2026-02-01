@@ -1,8 +1,8 @@
 shader_type canvas_item;
 
 uniform sampler2D tex_state : repeat_enable, filter_linear;
-uniform sampler2D tex_genome : repeat_enable, filter_nearest;
-uniform sampler2D tex_genome_ext : repeat_enable, filter_nearest; // [NEW] Valid data
+uniform sampler2D tex_genome : repeat_enable, filter_linear;
+uniform sampler2D tex_genome_ext : repeat_enable, filter_linear; // [NEW] Valid data
 uniform sampler2D tex_signal; // [NEW]
 uniform vec2 camera_pos = vec2(0.0, 0.0);
 uniform float camera_zoom = 1.0;
@@ -114,8 +114,7 @@ void fragment() {
     
     // Signal layer visualization (Full RGB)
     // Additive blending for glow
-    vec3 signal_col = signal * 0.5; 
-    col += signal_col;
+    vec3 signal_col = signal * 0.1; 
     
     // Highlight Logic
     // Re-sample central genome for selection logic (Nearest Neighbor)
@@ -141,13 +140,32 @@ void fragment() {
         d += abs(g_radius - u_select_vector.z) * 1.0;
         d += abs(g_affinity - u_select_vector.w) * 1.0;
         
-        if (d < 0.15) { // Keeping slightly higher in shader for smoother visual "neighborhood" effect
+        // Strict threshold for precise species matching (was 0.4)
+        if (d < 0.01) { 
              float pulse = 0.5 + 0.5 * sin(TIME * 6.0);
-             col = mix(col, vec3(1.0, 1.0, 1.0), 0.4 * pulse);
+             
+             // VISIBILITY OVERRIDE:
+             // To show the "complete" species, we ignore the mass-based brightness attenuation
+             // and render the base color if there is ANY mass present.
+             if (mass > 0.0001) {
+                 col = col_base * 1.5; // Boosted base color
+                 col = mix(col, vec3(1.0, 1.0, 1.0), 0.4 * pulse);
+                 
+                 // User requested multiplying by mass to avoid "block" look
+                 // We multiply by mass * 4.0 to ensure low-density areas are still visible (fulfilling "show complete species")
+                 // but maintain the gradient (fulfilling "not a block")
+                 col *= mass * 4.0; 
+             } else {
+                 col = vec3(0.0);
+             }
         } else {
-             col *= 0.4; // Dim others
-             col = vec3(dot(col, vec3(0.3, 0.59, 0.11))); 
+             col *= 0.4; // Dim others significantly
+             col = vec3(dot(col, vec3(0.3, 0.59, 0.11))); // Grayscale
         }
+        // Do NOT add signal_col here, effectively hiding signals during inspection
+    } else {
+        // Normal rendering: Add signals
+        col += signal_col;
     }
 
     col *= vignette;

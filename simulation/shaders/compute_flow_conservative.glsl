@@ -19,7 +19,7 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_flow_speed;
     float u_init_clusters;
     float u_init_density;
-    float u_colonize_thr;
+    float u_pad_col; // Was u_colonize_thr
     
     // 1. Gene Ranges (16 Genes * 2) = 32 floats
     // Block A: Physiology
@@ -85,16 +85,7 @@ vec2 unpack2(float packed) {
     return vec2(a, b);
 }
 
-const float MASS_SCALE = 100000.0; 
-
-// Stochastic Rounding
-uint get_rounded_amount(float amount, vec2 seed) {
-    uint i = uint(amount);
-    float f = fract(amount);
-    float h = hash(seed + vec2(amount, amount * 0.123));
-    if (h < f) i += 1u;
-    return i;
-}
+const float MASS_SCALE = 100000000.0; // 1e8 for High Precision
 
 vec3 HueToRGB(float hue) {
     float h = hue * 6.0;
@@ -153,7 +144,8 @@ void main() {
     // === 2. Calculate Forces ===
     
     // A. Mass Potential Gradient (Attraction / Growth Direction)
-    // Sobel Filter for dU/dx, dU/dy
+    // A. Mass Potential Gradient (Attraction / Growth Direction)
+    // Sobel Filter for dU/dx, dU/dy (Canonical)
     vec2 pixel_size = 1.0 / p.u_res;
     float gx = 0.0;
     gx += -1.0 * texture(tex_potential, uv + vec2(-1, -1)*pixel_size).r;
@@ -175,8 +167,6 @@ void main() {
     
     // APPLY AFFINITY (Cohesion)
     // High affinity = Follows potential gradient strongly (Clumps)
-    // Low affinity = Drifts more (Cloud)
-    // Base affinity 1.0, scalable up to 3.0 via gene
     gradU *= (0.5 + g_affinity * 2.5);
     
     // B. Signal Gradient (Chemotaxis)
@@ -187,19 +177,12 @@ void main() {
     ivec2 u_uv = (uv_i + ivec2(0, -1) + ivec2(p.u_res)) % ivec2(p.u_res);
     ivec2 d_uv = (uv_i + ivec2(0, 1) + ivec2(p.u_res)) % ivec2(p.u_res);
     
-    // We must re-compute signal matching here or assume tex_potential.a has it.
-    // tex_potential.a stores U_signal computed in Step 1.
-    // U_signal = dot(signal, myDetector).
-    // This is correct because compute_convolution updated U_signal based on *my* genome at that pixel.
     float sL = texelFetch(tex_potential, l_uv, 0).a;
     float sR = texelFetch(tex_potential, r_uv, 0).a;
     float sU = texelFetch(tex_potential, u_uv, 0).a;
     float sD = texelFetch(tex_potential, d_uv, 0).a;
     vec2 gradSignal = vec2(sR - sL, sD - sU);
     
-    // APPLY SENSITIVITY
-    // Combine Growth Gradient + Signal Gradient
-    // Signal Advect controls global weight, Sensitivity controls per-species gain
     vec2 totalAttraction = gradU + gradSignal * p.u_signal_advect * (g_sensitivity * p.u_signal_force_strength);
     
     // C. Density Gradient (Repulsion)
@@ -210,63 +193,36 @@ void main() {
     float mU = texelFetch(tex_state, u_uv, 0).r;
     vec2 gradA = vec2(mR - mL, mD - mU);
     
-    // APPLY REPULSION GENE
     gradA *= (0.5 + g_repulsion * 2.5);
     
     // D. Compute Velocity Field
-    // Morphology
     vec2 shape_c_inertia = unpack2(g1.a);
-    float g_inertia = shape_c_inertia.y; // [0-1] Inertial Mass (0=Light, 1=Heavy)
+    float g_inertia = shape_c_inertia.y;
 
-    // D. Compute Acceleration (Force) Field
-    // alpha = (mass / theta)^n
-    // APPLY DENSITY TOLERANCE: Modulates theta_A (Critical Mass)
+    // D. Compute Acceleration
     float local_theta = p.u_theta_A * (0.5 + g_density_tol * 2.0);
     float alpha = pow(max(myMass, 0.0) / max(local_theta, 0.001), p.u_alpha_n);
     
-    // Force = Speed * (Attraction - Alpha * Repulsion)
-    // APPLY MOBILITY to Force Magnitude
     float force_mult = p.u_flow_speed * (0.2 + g_mobility * 1.8);
     vec2 force = force_mult * (totalAttraction - alpha * gradA);
     
     // === INERTIAL INTEGRATION ===
-    // 1. Read previous velocity (Momentum)
-    // Stored in .gb channels of state texture
     vec2 old_vel = state.gb;
-    
-    // 2. Determine Responsiveness (Inverse Mass)
-    // Low Inertia (0.0) -> High Responsiveness (1.0) -> Instant Turn (Fly)
-    // High Inertia (1.0) -> Low Responsiveness (0.05) -> Drift (Vehicle/Planet)
     float responsiveness = mix(1.0, 0.05, g_inertia);
-    
-    // 3. Integrate: V_new = V_old + Force * dt * (1/Mass)
-    // We use mix() to stabilize the acceleration, effectively: V += F * dt * R
-    // But ensuring we don't explode if F is huge.
     vec2 integrated_vel = mix(old_vel, old_vel + force * p.u_dt, responsiveness);
-    
-    // 4. Apply Viscosity (Drag/Friction)
-    // Higher viscosity = faster loss of momentum
-    // Normalized to dt to ensure frame-rate independence
     integrated_vel *= clamp(1.0 - g_viscosity * p.u_dt * 2.0, 0.0, 1.0);
     
     vec2 vel = integrated_vel;
     
     
     // === 3. Mass Advection (Scatter) ===
-    // Distribution to 4 neighbors
     vec2 pos_next = uv * p.u_res + vel * p.u_dt;
-    
-    // Wrap coordinates
     pos_next = mod(pos_next, p.u_res);
     
-    // Bilinear Scatter
     vec2 start_cell_f = floor(pos_next - 0.5);
     ivec2 start_cell = ivec2(start_cell_f);
-    vec2 f = pos_next - 0.5 - start_cell_f; // Fractional part
+    vec2 f = pos_next - 0.5 - start_cell_f;
     
-    // Distribute mass
-    // 00 10
-    // 01 11
     float w00 = (1.0 - f.x) * (1.0 - f.y);
     float w10 = f.x * (1.0 - f.y);
     float w01 = (1.0 - f.x) * f.y;
@@ -277,52 +233,79 @@ void main() {
     ivec2 c01 = (start_cell + ivec2(0, 1) + ivec2(p.u_res)) % ivec2(p.u_res);
     ivec2 c11 = (start_cell + ivec2(1, 1) + ivec2(p.u_res)) % ivec2(p.u_res);
     
-    // Atomic accumulation (using robust int mapping)
-    // STOCHASTIC ROUNDING to preserve fractional mass over time
-    // We mix uv and u_seed to get a unique random value per pixel per frame
-    uint amount = get_rounded_amount(myMass * MASS_SCALE, uv + vec2(p.u_seed));
-    if (amount > 0) {
-        // Guaranteed Conservation: Calculate 3, remainder goes to 4th
-        uint a00 = uint(float(amount) * w00);
-        uint a10 = uint(float(amount) * w10);
-        uint a01 = uint(float(amount) * w01);
-        uint a11 = amount - a00 - a10 - a01; // The remainder ensures Sum == Amount
+    // Mass Accumulation (High Precision)
+    uint total_amount = uint(myMass * MASS_SCALE);
+    
+    if (total_amount > 0) {
+        // SAFE PARTITIONING (Cascade Remainder)
+        // Prevents underflow where a00+a10+a01 > total (due to float rounding up)
+        // forcing a11 to wrap around to uint_max (Mass Explosion).
         
-        imageAtomicAdd(img_mass_accum, c00, a00);
-        imageAtomicAdd(img_mass_accum, c10, a10);
-        imageAtomicAdd(img_mass_accum, c01, a01);
-        imageAtomicAdd(img_mass_accum, c11, a11);
+        uint remaining = total_amount;
         
-        // WINNER TRACKING (For Genome Inheritance)
-        // We pack (Mass Contribution << 24) | (Source Index)
-        // 8-bit Score (0-255) + 24-bit Index (0-16.7M) -> Supports 4096*4096
+        uint a00 = uint(float(total_amount) * w00);
+        if (a00 > remaining) a00 = remaining;
+        remaining -= a00;
         
+        uint a10 = uint(float(total_amount) * w10);
+        if (a10 > remaining) a10 = remaining;
+        remaining -= a10;
+        
+        uint a01 = uint(float(total_amount) * w01);
+        if (a01 > remaining) a01 = remaining;
+        remaining -= a01;
+        
+        uint a11 = remaining; // The rest goes here
+        
+        if (a00 > 0) imageAtomicAdd(img_mass_accum, c00, a00);
+        if (a10 > 0) imageAtomicAdd(img_mass_accum, c10, a10);
+        if (a01 > 0) imageAtomicAdd(img_mass_accum, c01, a01);
+        if (a11 > 0) imageAtomicAdd(img_mass_accum, c11, a11);
+        
+        // WINNER TRACKING
         uint src_idx = uint(uv_i.y) * uint(p.u_res.x) + uint(uv_i.x);
         src_idx = src_idx & 0xFFFFFFu; 
         
-        // "No Mass Without Representation"
-        // If we send mass (weighted amount > 0), we MUST register at least 1 unit of claim.
-        // Otherwise, the mass arrives anonymously and becomes a "Null Species" (Ghost).
+        // Score based on ACTUAL sent mass amount (a00 etc)
+        // Using 'total_amount' as denominator to normalize would suffice, but raw amount is fine.
+        // We multiply by constant to map to 0-255 roughly (max mass for 1 pixel is ~1-5?)
+        // Actually, just checking > 0 is enough to verify existence.
+        // But for competition, we want Larger Mass > Smaller Mass.
+        // a00 is typically 1e7 or 1e8 range.
+        // We can just use high bits or log score.
+        // Simple linear map: if a00 is 100% of mass, score is 255.
+        // But 'total_amount' varies.
+        // Let's stick to the previous robust logic:
         
-        // WINNER TRACKING (For Genome Inheritance)
+        #define CALC_SCORE_SAFE(amt, tot) ( (amt > 0) ? max(1u, uint( (float(amt)/max(float(tot),1.0)) * 255.0 )) : 0u )
         
-        // We already have the exact amounts a00..a11 calculated above!
-        // No need to recalculate and risk mismatches.
+        // Revised Score: Just use the raw amount scaled? No, we need 0-255? 
+        // Actually img_winner_tracker seems to support High Bits for score?
+        // compute_normalize reads: uint packed = imageLoad...
+        // Format R32UI.
+        // Packed = (Score << 24) | Index.
+        // Score is 8 bits (255).
+        
+        // Proper normalized score: fraction of MY mass sent.
+        // NO! We want Absolute Mass comparison.
+        // A giant blob contributing 10% should beat a tiny speck contributing 100%.
+        // Score = min(255, amount / (SCALE/255) )
+        // MASS_SCALE = 1e8.
+        // If amount = 1e6 (0.01 mass), Score = 1?
+        // Let's scale so 1.0 mass = 255 score.
+        // score = amount / (1e8 / 255) = amount * 2.55e-6
+        
+        #define CALC_SCORE_ABS(amt) ( (amt > 0) ? max(1u, uint(clamp(float(amt) * 0.00000255, 1.0, 255.0))) : 0u )
+        
+        uint s00 = CALC_SCORE_ABS(a00);
+        uint s10 = CALC_SCORE_ABS(a10);
+        uint s01 = CALC_SCORE_ABS(a01);
+        uint s11 = CALC_SCORE_ABS(a11);
 
-        
-        // Calculate tracker score (still scaled for competition), but floor clamped to 1 if mass exists.
-        // Scale reduced to fit 8-bit (255 max). 
-        // With scale 1000.0, 0.25 mass -> 250 score.
-        
-        uint m00 = (a00 > 0) ? max(1u, uint(clamp(myMass * w00 * 1000.0, 0.0, 255.0))) : 0u;
-        uint m10 = (a10 > 0) ? max(1u, uint(clamp(myMass * w10 * 1000.0, 0.0, 255.0))) : 0u;
-        uint m01 = (a01 > 0) ? max(1u, uint(clamp(myMass * w01 * 1000.0, 0.0, 255.0))) : 0u;
-        uint m11 = (a11 > 0) ? max(1u, uint(clamp(myMass * w11 * 1000.0, 0.0, 255.0))) : 0u;
-        
-        if (m00 > 0) imageAtomicMax(img_winner_tracker, c00, (m00 << 24u) | src_idx);
-        if (m10 > 0) imageAtomicMax(img_winner_tracker, c10, (m10 << 24u) | src_idx);
-        if (m01 > 0) imageAtomicMax(img_winner_tracker, c01, (m01 << 24u) | src_idx);
-        if (m11 > 0) imageAtomicMax(img_winner_tracker, c11, (m11 << 24u) | src_idx);
+        if (s00 > 0) imageAtomicMax(img_winner_tracker, c00, (s00 << 24u) | src_idx);
+        if (s10 > 0) imageAtomicMax(img_winner_tracker, c10, (s10 << 24u) | src_idx);
+        if (s01 > 0) imageAtomicMax(img_winner_tracker, c01, (s01 << 24u) | src_idx);
+        if (s11 > 0) imageAtomicMax(img_winner_tracker, c11, (s11 << 24u) | src_idx);
     }
     
     // Store calculated velocity (source, instantaneous) into the G/B channels of the destination state

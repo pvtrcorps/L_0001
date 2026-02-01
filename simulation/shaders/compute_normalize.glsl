@@ -55,7 +55,7 @@ layout(set = 0, binding = 8) uniform sampler2D tex_old_genome;
 layout(set = 0, binding = 9) uniform sampler2D tex_genome_ext;      // Source Ext (Read Old)
 layout(set = 0, binding = 10, rgba32f) uniform image2D img_new_genome_ext; // Target Ext (Write New)
 
-const float MASS_SCALE = 100000.0; 
+const float MASS_SCALE = 100000000.0; // 1e8 for High Precision
 
 // PCG Hash (1d)
 uint pcg_hash_1d(uint v) {
@@ -170,26 +170,24 @@ void main() {
     // 5. Final Mass, Emission & Consumption
     float finalMass = mass;
     
-    if (finalMass > 0.05) {
+    // CONTINUOUS CONSUMPTION/SECRETION
+    // Removed 0.05 threshold to prevent "Digital Gating" artifacts.
+    // Reaction occurs even for trace amounts of mass, ensuring smooth gradients.
+    if (finalMass > 0.0001) {
         vec3 emittedColor = HueToRGB(g_emission_hue);
         vec4 currentSignal = imageLoad(img_new_signal, uv_i); 
         
         // A. Consumption (Grazing)
         // Creatures consume signal proportional to their mass * dt
-        // This prevents infinite accumulation and creates local scarcity
         vec3 consumed = currentSignal.rgb * (finalMass * 0.5 * p.u_dt);
         vec3 signalAfterConsumption = currentSignal.rgb - consumed;
         
         // B. Secretion (Emission)
-        // Add new signal
         vec3 addedSignal = emittedColor * (finalMass * g_secretion * p.u_dt * p.u_signal_emission_strength);
         vec3 nextSignal = signalAfterConsumption + addedSignal;
         
         // Clamp
         imageStore(img_new_signal, uv_i, vec4(max(vec3(0.0), nextSignal), 0.0));
-    } else {
-        // Even if no mass here, signal exists but no consumption/secretion happens
-        // (Decay and Diffusion handle the rest in Signal Shader)
     }
     
     // Store final state (Mass, Velocity, Debug/Extra)

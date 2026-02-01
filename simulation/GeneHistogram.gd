@@ -48,7 +48,7 @@ func _draw():
 	var font = get_theme_default_font()
 	
 	for g in range(16):
-		var col_idx = g / 8
+		var col_idx = floori(g / 8.0)
 		var row_idx = g % 8
 		
 		var x_base = col_idx * col_w

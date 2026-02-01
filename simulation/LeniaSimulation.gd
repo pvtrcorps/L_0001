@@ -336,7 +336,7 @@ func _dispatch_step():
 	rd.compute_list_dispatch(compute_list_flow, wg_x, wg_y, 1)
 	rd.compute_list_end()
 	
-	rd.barrier(RenderingDevice.BARRIER_MASK_COMPUTE) # barrier automatically inserted
+	# rd.barrier(RenderingDevice.BARRIER_MASK_COMPUTE) # barrier automatically inserted by RD
 	
 	# 4. Normalize Pass
 	var key_norm = "norm_" + str(ping_pong)
@@ -732,7 +732,7 @@ func _create_set_analysis(tex_state: RID, tex_genome: RID, tex_genome_ext: RID) 
 	
 	return rd.uniform_set_create([u_ubo, u_state, u_genome, u_genome_ext, u_analysis], shader_analysis, 0)
 
-func _create_set_flow_conservative(src_state: RID, src_genome: RID, src_genome_ext: RID, src_potential: RID, src_sig: RID, dst_mass: RID, dst_state: RID, dst_genome: RID, dst_winner: RID) -> RID:
+func _create_set_flow_conservative(src_state: RID, src_genome: RID, src_genome_ext: RID, src_potential: RID, src_sig: RID, dst_mass: RID, dst_state: RID, _dst_genome: RID, dst_winner: RID) -> RID:
 	var u_ubo = RDUniform.new()
 	u_ubo.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
 	u_ubo.binding = 0

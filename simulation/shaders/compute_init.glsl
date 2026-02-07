@@ -67,7 +67,7 @@ void main() {
     if (cell_hash < p.u_init_density) {
         vec2 cell_center = (vec2(cell_x, cell_y) + 0.5) / p.u_init_clusters;
         float d = length(uv - cell_center) * p.u_init_clusters;
-        density = smoothstep(0.4, 0.2, d);
+        density = smoothstep(0.30001, 0.3, d);
     }
     
 

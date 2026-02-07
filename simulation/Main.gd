@@ -26,7 +26,9 @@ var ui_schema = {
 		["theta_A", "Global Density Mult", 0.1, 10.0, 0.1],
 		["alpha_n", "Repulsion Sharpness (n)", 0.0, 2.0, 0.1],
 		["beta_selection", "Selection Pressure (β)", 0.0, 3.0, 0.1],
-		["flow_speed", "Flow Speed", 1.0, 10.0, 0.5]
+		["beta_selection", "Selection Pressure (β)", 0.0, 3.0, 0.1],
+		["flow_speed", "Flow Speed", 1.0, 10.0, 0.5],
+		["fluid_momentum", "Fluid Inertia", 0.0, 1.0, 0.05]
 	],
 	"Chemical Signal": [
 		["signal_diff", "Diffusion Rate", 0.0, 10.0, 0.1],
@@ -124,6 +126,7 @@ func _build_ui():
 		"theta_A": "Critical Mass (Alpha). The density threshold where repulsion forces begin to dominate.",
 		"alpha_n": "Repulsion Sharpness. Controls how abruptly the repulsion force kicks in.",
 		"flow_speed": "Advection Strength Multiplier. Increases flow force without changing time step (dt).",
+		"fluid_momentum": "Fluid Momentum/Inertia. 1.0 = Fluid Motion, 0.0 = Direct Movement (Easier to see forces).",
 		"signal_diff": "Diffusion Rate. How fast the chemical signal spreads to neighboring cells.",
 		"signal_decay": "Decay Rate. How fast the chemical signal dissipates over time.",
 		"signal_advect": "Advection Weight. How much the chemical signal is dragged by the mass flow.",

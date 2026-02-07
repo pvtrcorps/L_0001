@@ -23,6 +23,7 @@ extends Resource
 @export var alpha_n: float = 3.0        # Repulsion Sharpness
 @export var flow_speed: float = 5.0     # Multiplier for advection force
 @export var beta_selection: float = 1.0 # Selection pressure
+@export var fluid_momentum: float = 1.0 # Momentum/Inertia (0.0 = Aristotelian, 1.0 = Newtonian)
 
 @export_group("Signal Layer")
 @export var signal_diff: float = 2.0    # Diffusion Rate

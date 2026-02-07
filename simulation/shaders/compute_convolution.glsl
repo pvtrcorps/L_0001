@@ -1,6 +1,15 @@
 #version 450
 
-layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+// === OPTIMIZATION CONSTANTS ===
+// TILE_SIZE = WORKGROUP_SIZE + 2 * MAX_RADIUS
+// We use a fixed MAX_RADIUS to allocate shared memory. 
+// Requested R=16. We set SAFE limit to 20.
+#define WORKGROUP_SIZE 8
+#define MAX_RADIUS 20
+#define TILE_WIDTH (WORKGROUP_SIZE + 2 * MAX_RADIUS)
+#define TILE_AREA (TILE_WIDTH * TILE_WIDTH)
+
+layout(local_size_x = WORKGROUP_SIZE, local_size_y = WORKGROUP_SIZE, local_size_z = 1) in;
 
 layout(set = 0, binding = 0, std430) buffer Params {
     // 0. Globals
@@ -49,6 +58,10 @@ layout(set = 0, binding = 3) uniform sampler2D tex_signal;
 layout(set = 0, binding = 4, rgba32f) uniform image2D img_potential;
 layout(set = 0, binding = 5) uniform sampler2D tex_genome_ext; // Genes 9-16 [NEW]
 
+// === SHARED MEMORY ===
+// Stores: .r = Mass, .gba = Signal (RGB)
+shared vec4 tile_cache[TILE_AREA];
+
 vec2 unpack2(float packed) {
     uint bits = floatBitsToUint(packed) & ~0x40000000u; // Clear normalized bit
     float a = float((bits >> 15u) & 0x7FFFu) / 32767.0;
@@ -61,47 +74,23 @@ float gaussian(float x, float mu, float sigma) {
     return exp(-0.5 * d * d);
 }
 
-// Dynamic Kernel Generation based on Abstract Shape Genes
-float kernel(float r, float R_actual, vec4 genome_1) {
-    // Unpack Morphology Genes
-    // R: Mu, Sigma
-    // G: Radius, Viscosity
-    // B: Shape A, Shape B
-    // A: Shape C, Growth Rate
-    
-    vec2 shape_ab = unpack2(genome_1.b);
-    vec2 shape_c_gr = unpack2(genome_1.a);
-    
-    float shape_a = shape_ab.x; // Ring Balance (Inner vs Outer)
-    float shape_b = shape_ab.y; // Complexity / Texture
-    float shape_c = shape_c_gr.x; // Ring Spacing / Position
-    
-    // Map Abstract Shape -> Concrete Kernel Weights (b1, b2, b3)
-    // Shape A (0-1): 0 = Outer Ring Dominant, 1 = Inner Ring Dominant
-    float b1 = 0.1 + shape_a * 0.9;
-    float b3 = 0.1 + (1.0 - shape_a) * 0.9;
-    
-    // Shape B (0-1): Modulates the middle ring (b2)
-    float b2 = shape_b;
-    
-    // Fixed positions for standard Lenia life
-    float a1 = 0.15;
-    float a2 = 0.35 + shape_c * 0.3; // Shape C modulates middle ring position
-    float a3 = 0.85;
-    
-    // Widths (Standardized for stability)
-    float w1 = 0.15;
-    float w2 = 0.20;
-    float w3 = 0.15;
-    
-    // Normalize distance by Species Radius
+// Pre-calculated Kernel Parameters
+struct KernelParams {
+    float b1, b2, b3;
+    float a1, a2, a3;
+    float w1, w2, w3;
+};
+
+// Optimized Kernel: Params are pre-calculated, only distance `r` varies
+float eval_kernel(float r, float R_actual, KernelParams k) {
     float norm_r = r / R_actual;
     if (norm_r > 1.0) return 0.0;
     
     // Gaussian bumps
-    float k1 = b1 * gaussian(norm_r, a1, w1);
-    float k2 = b2 * gaussian(norm_r, a2, w2);
-    float k3 = b3 * gaussian(norm_r, a3, w3);
+    // We can inline Gaussian here for speed if needed, but the compiler usually buffers it well
+    float k1 = k.b1 * exp(-0.5 * ((norm_r - k.a1)/k.w1) * ((norm_r - k.a1)/k.w1));
+    float k2 = k.b2 * exp(-0.5 * ((norm_r - k.a2)/k.w2) * ((norm_r - k.a2)/k.w2));
+    float k3 = k.b3 * exp(-0.5 * ((norm_r - k.a3)/k.w3) * ((norm_r - k.a3)/k.w3));
     
     return k1 + k2 + k3;
 }
@@ -121,22 +110,60 @@ vec3 HueToRGB(float hue) {
 }
 
 void main() {
-    ivec2 uv_i = ivec2(gl_GlobalInvocationID.xy);
-    if (uv_i.x >= int(p.u_res.x) || uv_i.y >= int(p.u_res.y)) return;
-    
-    vec2 uv = (vec2(uv_i) + 0.5) / p.u_res;
     ivec2 res_i = ivec2(p.u_res);
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 lid = ivec2(gl_LocalInvocationID.xy);
+    ivec2 group_id = ivec2(gl_WorkGroupID.xy);
     
-    // 1. Read Genome 1 (Physiology/Morphology)
+    // Base coordinate of the tile (top-left of the halo region)
+    // The tile centers on the WorkGroup.
+    // WorkGroup covers [group_id * 8, group_id * 8 + 7]
+    // Tile starts at [group_id * 8 - MAX_RADIUS, group_id * 8 - MAX_RADIUS]
+    ivec2 tile_base = group_id * WORKGROUP_SIZE - ivec2(MAX_RADIUS);
+    
+    // === 1. COLLABORATIVE LOADING ===
+    // Total pixels to load = TILE_AREA
+    // Total threads = WORKGROUP_SIZE * WORKGROUP_SIZE = 64
+    uint thread_idx = gl_LocalInvocationIndex; // 0..63
+    uint total_threads = WORKGROUP_SIZE * WORKGROUP_SIZE;
+    
+    for (uint i = thread_idx; i < TILE_AREA; i += total_threads) {
+        // Map linear index 'i' to tile local coord (tx, ty)
+        int tx = int(i) % TILE_WIDTH;
+        int ty = int(i) / TILE_WIDTH;
+        
+        // Calculate global coordinate with wrapping
+        ivec2 global_pos = (tile_base + ivec2(tx, ty) + res_i) % res_i; // True standard modulo
+        // Fix standard modulo for negative numbers in GLSL: (a % n + n) % n
+        global_pos = (tile_base + ivec2(tx, ty));
+        global_pos = (global_pos % res_i + res_i) % res_i;
+        
+        // Fetch Global Memory
+        float mass = texelFetch(tex_state, global_pos, 0).r;
+        vec3 sig = texelFetch(tex_signal, global_pos, 0).rgb;
+        
+        // Store in Shared Memory
+        tile_cache[i] = vec4(mass, sig);
+    }
+    
+    // Wait for all threads to finish loading
+    barrier();
+    
+    // === 2. COMPUTE PIXEL ===
+    // If outside screen, we still helped load, but we don't compute.
+    // (Wait, we can't return early easily because 'barrier' must be hit by all flows if we had another one, 
+    // but here we are done with barriers, so early exit is fine for computation).
+    if (gid.x >= int(p.u_res.x) || gid.y >= int(p.u_res.y)) return;
+    
+    vec2 uv = (vec2(gid) + 0.5) / p.u_res;
+    
+    // 1. Read Genome
     vec4 g1 = texture(tex_genome, uv);
-    
-    // 2. Read Genome 2 (Behavior/Senses)
     vec4 g2 = texture(tex_genome_ext, uv);
     
     // === VOID CHECK ===
-    // If no genes are present, this is a Vacuum/Void pixel.
     if (dot(g1, g1) < 0.0001) {
-        imageStore(img_potential, uv_i, vec4(0.0));
+        imageStore(img_potential, gid, vec4(0.0));
         return;
     }
 
@@ -146,52 +173,76 @@ void main() {
     float g_sigma = mu_sigma.y;
     
     vec2 rad_visc = unpack2(g1.g);
-    float g_radius = rad_visc.x; // [0-1] relative to p.u_R? No, absolute multiplier?
-    // Init maps it to u_range_radius. Let's assume that range is e.g. [0.5, 2.0]
-    // So R_actual = p.u_R * g_radius
+    float g_radius = rad_visc.x; 
     
     vec2 hue_hue = unpack2(g2.a);
     float g_detection_hue = hue_hue.y;
     
     // === SPECTRAL SIGNAL ===
     vec3 myDetector = HueToRGB(g_detection_hue);
-    vec3 signalVec = texture(tex_signal, uv).rgb;
-    float U_signal = dot(signalVec, myDetector); 
+    vec3 mySignal = texture(tex_signal, uv).rgb; // Start Center Self?
+    // Actually we only need convolution results for signal, not center.
+    // But let's check old logic...
+    // "U_signal = dot(signalVec, myDetector)" was calculated but unused in loop. 
+    // The loop used neighbors.
     
-    // === CONVOLUTION ===
-    // Dynamic Radius!
+    // === PREPARE KERNEL ===
     float R_actual = max(p.u_R * g_radius, 1.0);
-    int maxR = int(R_actual) + 1; // Conservative bound
     
-    // Optimization: Hard cap maxR to prevent massive loops if genes go wild
-    maxR = min(maxR, 60); 
+    // Clamp R to our Max Radius allocated in Shared Mem
+    // This is the physical limit of our optimization.
+    R_actual = min(R_actual, float(MAX_RADIUS)); 
+    
+    vec2 shape_ab = unpack2(g1.b);
+    vec2 shape_c_gr = unpack2(g1.a);
+    
+    KernelParams kp;
+    kp.b1 = 0.1 + shape_ab.x * 0.9;
+    kp.b3 = 0.1 + (1.0 - shape_ab.x) * 0.9;
+    kp.b2 = shape_ab.y;
+    
+    kp.a1 = 0.15;
+    kp.a2 = 0.35 + shape_c_gr.x * 0.3;
+    kp.a3 = 0.85;
+    
+    kp.w1 = 0.15;
+    kp.w2 = 0.20;
+    kp.w3 = 0.15;
+    
+    int loopR = int(ceil(R_actual));
     
     float sum = 0.0;
     float sumSignal = 0.0;
     float totalWeight = 0.0;
     
-    for (int dy = -maxR; dy <= maxR; dy++) {
-        for (int dx = -maxR; dx <= maxR; dx++) {
-            vec2 offset = vec2(float(dx), float(dy));
-            float r = length(offset);
+    // Our position within the tile
+    // lid is (0..7), tile starts at -MAX_RADIUS.
+    // So our index in tile is (lid.x + MAX_RADIUS, lid.y + MAX_RADIUS)
+    ivec2 my_tile_pos = lid + ivec2(MAX_RADIUS);
+    
+    // Loop only the necessary radius
+    for (int dy = -loopR; dy <= loopR; dy++) {
+        for (int dx = -loopR; dx <= loopR; dx++) {
             
-            // Pass R_actual to kernel so it normalizes correctly [0,1] inside the species radius
-            float w = kernel(r, R_actual, g1);
+            // Shared Memory Lookup
+            int tx = my_tile_pos.x + dx;
+            int ty = my_tile_pos.y + dy;
             
+            // Flatten index
+            int idx = ty * TILE_WIDTH + tx;
+            
+            vec4 cell_data = tile_cache[idx];
+            float neighborMass = cell_data.r;
+            vec3 neighborSignal = cell_data.gba;
+            
+            float dist = length(vec2(float(dx), float(dy)));
+            
+            float w = eval_kernel(dist, R_actual, kp);
+           
             if (w > 0.0001) {
-                ivec2 neighbor_coord = (uv_i + ivec2(dx, dy) + res_i) % res_i;
-                float neighborMass = texelFetch(tex_state, neighbor_coord, 0).r;
-                
-                // Fetch Signal Vector
-                vec3 neighborSignal = texelFetch(tex_signal, neighbor_coord, 0).rgb;
                 // Compute Match
                 float signalMatch = dot(neighborSignal, myDetector);
-                
-                // NEW LOGIC: Like Attracts, Unlike Repells
-                // Score = 2.0 * Match - TotalIntensity
-                // If Match == Total (Pure same color) -> 2*1 - 1 = +1 (Attract)
-                // If Match == 0 (Pure different color) -> 0 - 1 = -1 (Repel)
-                float totalIntensity = dot(neighborSignal, vec3(1.0)); // L1 Norm approx
+                float totalIntensity = dot(neighborSignal, vec3(1.0));
                 float signedScore = 2.0 * signalMatch - totalIntensity;
                 
                 sum += neighborMass * w;
@@ -202,18 +253,15 @@ void main() {
     }
     
     float U_raw = (totalWeight > 0.0) ? sum / totalWeight : 0.0;
-    // Normalized Convolved Signal
     float U_signal_smooth = (totalWeight > 0.0) ? sumSignal / totalWeight : 0.0;
     
     // === GROWTH G(U) ===
-    // Use Species Specific Mu and Sigma
     float mu = g_mu; 
-    
-    float sigma = 0.001 + g_sigma * 0.2; // Scaling for stability
+    float sigma = 0.001 + g_sigma * 0.2; 
     
     float diff = (U_raw - mu);
     float exp_term = exp(-0.5 * (diff * diff) / max(sigma * sigma, 0.0001));
     float U_growth = 2.0 * exp_term - 1.0; 
     
-    imageStore(img_potential, uv_i, vec4(U_growth, 0.0, 0.0, U_signal_smooth));
+    imageStore(img_potential, gid, vec4(U_growth, 0.0, 0.0, U_signal_smooth));
 }

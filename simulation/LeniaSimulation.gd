@@ -33,6 +33,7 @@ var params = {
 	"signal_decay": 0.001,   # Decay Rate
 	"signal_advect": 1.0,  # Signal advection weight [0-1] (how much signals follow mass flow)
 	"flow_speed": 1.0,     # Multiplier for advection force (decopuled from dt)
+	"fluid_momentum": 1.0, # Momentum/Inertia (0.0 = Aristotelian, 1.0 = Newtonian)
 	
 	"beta_selection": 1.0, # Selection pressure for negotiation rule
 	
@@ -270,7 +271,7 @@ func _update_ubo():
 		params["signal_advect"], params["beta_selection"], params["signal_diff"], params["signal_decay"],
 		
 		# Chunk 3 (48-64 bytes): Flow + Init Props
-		params["flow_speed"], params["init_clusters"], params["init_density"], 0.0,
+		params["flow_speed"], params["init_clusters"], params["init_density"], params["fluid_momentum"],
 		
 		# 2. Gene Ranges (16 Genes * 2 values = 32 floats)
 		# Block A: Physiology (4 Genes)

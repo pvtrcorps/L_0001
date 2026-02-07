@@ -19,7 +19,7 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_flow_speed;
     float u_init_clusters;
     float u_init_density;
-    float u_pad_col; // Was u_colonize_thr
+    float u_fluid_momentum; // Was u_pad_col
     
     // 1. Gene Ranges (16 Genes * 2) = 32 floats
     // Block A: Physiology
@@ -99,6 +99,35 @@ vec3 HueToRGB(float hue) {
     else if (h < 5.0) rgb = vec3(x, 0.0, c);
     else              rgb = vec3(c, 0.0, x);
     return rgb;
+}
+
+uint calculate_gumbel_score(uint amt, float pot, float beta, vec2 seed_uv) {
+    if (amt == 0u) return 0u;
+    
+    // 1. Log Mass Term
+    // amt is up to 1e8. log(1e8) ~ 18.4
+    float log_mass = log(float(amt)); 
+    
+    // 2. Potential Term
+    // pot is [-1, 1], beta is [0, 5]
+    float pot_term = pot * beta;
+    
+    // 3. Gumbel Noise
+    // u ~ Uniform(0,1)
+    float u = hash(seed_uv);
+    // Avoid log(0)
+    u = clamp(u, 0.0000001, 0.9999999);
+    float gumbel = -log(-log(u));
+    
+    // 4. Total Score
+    // Range approx: [0, 18] + [-5, 5] + [-2, 10] = [-7, 33]
+    // We map this to [1, 255] for the 8-bit storage.
+    float score_float = log_mass + pot_term + gumbel;
+    
+    // Shift (+10) and Scale (*4) to fit typical range into 0-255
+    float map_s = (score_float + 10.0) * 4.0;
+    
+    return uint(clamp(map_s, 1.0, 255.0));
 }
 
 
@@ -208,6 +237,12 @@ void main() {
     
     // === INERTIAL INTEGRATION ===
     vec2 old_vel = state.gb;
+    
+    // FLUID MOMENTUM CONTROL
+    // If u_fluid_momentum < 1.0, we dampen the old velocity.
+    // If 0.0, it becomes Aristotelian (velocity = force * dt), no inertia.
+    old_vel *= p.u_fluid_momentum;
+    
     float responsiveness = mix(1.0, 0.05, g_inertia);
     vec2 integrated_vel = mix(old_vel, old_vel + force * p.u_dt, responsiveness);
     integrated_vel *= clamp(1.0 - g_viscosity * p.u_dt * 2.0, 0.0, 1.0);
@@ -295,12 +330,24 @@ void main() {
         // Let's scale so 1.0 mass = 255 score.
         // score = amount / (1e8 / 255) = amount * 2.55e-6
         
-        #define CALC_SCORE_ABS(amt) ( (amt > 0) ? max(1u, uint(clamp(float(amt) * 0.00000255, 1.0, 255.0))) : 0u )
+        // NEGOTIATION RULE (Gumbel-Max)
+        // Score = log(Mass) + Beta * Potential + GumbelNoise
+        // Mass is 'amount' (uint). Potential is 'source_pot' [-1, 1].
         
-        uint s00 = CALC_SCORE_ABS(a00);
-        uint s10 = CALC_SCORE_ABS(a10);
-        uint s01 = CALC_SCORE_ABS(a01);
-        uint s11 = CALC_SCORE_ABS(a11);
+        // 1. Get Source Potential (Growth Affinity)
+        float source_pot = texture(tex_potential, uv).r; 
+        
+        // 2. Pre-calc random seed base for this pixel/frame
+        // We use the pixel index and the global seed to get a unique hash base
+        vec2 noise_base_uv = uv + vec2(p.u_seed, p.u_seed * 0.1);
+
+        #define CALC_SCORE_GUMBEL(amt, offset_idx) \
+            ( (amt > 0) ? calculate_gumbel_score(amt, source_pot, p.u_beta, noise_base_uv + vec2(float(offset_idx)*0.01)) : 0u )
+            
+        uint s00 = CALC_SCORE_GUMBEL(a00, 0);
+        uint s10 = CALC_SCORE_GUMBEL(a10, 1);
+        uint s01 = CALC_SCORE_GUMBEL(a01, 2);
+        uint s11 = CALC_SCORE_GUMBEL(a11, 3);
 
         if (s00 > 0) imageAtomicMax(img_winner_tracker, c00, (s00 << 24u) | src_idx);
         if (s10 > 0) imageAtomicMax(img_winner_tracker, c10, (s10 << 24u) | src_idx);

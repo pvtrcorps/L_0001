@@ -76,17 +76,21 @@ var params = {
 var rd: RenderingDevice
 var shader_init: RID
 var shader_conv: RID
+var shader_conv_h: RID  # [SEPARABLE] Horizontal pass
+var shader_conv_v: RID  # [SEPARABLE] Vertical pass
 
 var shader_stats: RID
-var shader_signal: RID # [NEW]
+var shader_signal: RID
 var pipeline_init: RID
 var pipeline_conv: RID
+var pipeline_conv_h: RID  # [SEPARABLE]
+var pipeline_conv_v: RID  # [SEPARABLE]
 
 var pipeline_stats: RID
 var pipeline_analysis: RID
 var pipeline_flow_conservative: RID
 var pipeline_normalize: RID
-var pipeline_signal: RID # [NEW]
+var pipeline_signal: RID
 var shader_analysis: RID
 var shader_flow_conservative: RID
 var shader_normalize: RID
@@ -97,12 +101,13 @@ var tex_state_b: RID
 var tex_genome_a: RID
 var tex_genome_b: RID
 var tex_genome_ext_a: RID # [NEW] Ext Texture (Genes 9-16)
-var tex_genome_ext_b: RID # [NEW]
+var tex_genome_ext_b: RID
 var tex_potential: RID
+var tex_conv_intermediate: RID  # [SEPARABLE] H→V pass buffer
 var tex_mass_accum: RID
-var tex_winner_tracker: RID # [NEW]
-var tex_signal_a: RID # [NEW]
-var tex_signal_b: RID # [NEW]
+var tex_winner_tracker: RID
+var tex_signal_a: RID
+var tex_signal_b: RID
 
 # Bridges for display
 var texture_rd_state: Texture2DRD
@@ -328,7 +333,10 @@ func _dispatch_step():
 	
 	# rd.barrier(RenderingDevice.BARRIER_MASK_COMPUTE) # barrier automatically inserted
 	
-	# 2. Convolution Pass
+	# 2. Convolution Pass (Optimized 2D with 16×16 workgroups)
+	var wg_conv_x = int(ceil(params["res_x"] / 16.0))
+	var wg_conv_y = int(ceil(params["res_y"] / 16.0))
+	
 	var key_conv = "conv_" + str(ping_pong)
 	var set_conv = set_cache.get(key_conv)
 	if not set_conv or not set_conv.is_valid():
@@ -338,7 +346,7 @@ func _dispatch_step():
 	var compute_list = rd.compute_list_begin()
 	rd.compute_list_bind_compute_pipeline(compute_list, pipeline_conv)
 	rd.compute_list_bind_uniform_set(compute_list, set_conv, 0)
-	rd.compute_list_dispatch(compute_list, wg_x, wg_y, 1)
+	rd.compute_list_dispatch(compute_list, wg_conv_x, wg_conv_y, 1)
 	rd.compute_list_end()
 	
 	# 3. Flow Pass
@@ -511,6 +519,9 @@ func _create_textures():
 	tex_signal_a = rd.texture_create(fmt_sig, RDTextureView.new())
 	tex_signal_b = rd.texture_create(fmt_sig, RDTextureView.new())
 	
+	# Intermediate buffer for separable convolution (H→V pass)
+	tex_conv_intermediate = rd.texture_create(fmt_sig, RDTextureView.new())
+	
 	# Atomic Mass Accumulation (R32_UINT)
 	var fmt_atomic = RDTextureFormat.new()
 	fmt_atomic.width = int(params["res_x"])
@@ -544,6 +555,8 @@ func _compile_shaders():
 	var paths = {
 		"init": "res://simulation/shaders/compute_init.glsl",
 		"conv": "res://simulation/shaders/compute_convolution.glsl",
+		"conv_h": "res://simulation/shaders/compute_conv_h.glsl",
+		"conv_v": "res://simulation/shaders/compute_conv_v.glsl",
 		"stats": "res://simulation/shaders/compute_stats.glsl",
 		"analysis": "res://simulation/shaders/compute_analysis.glsl",
 		"flow_con": "res://simulation/shaders/compute_flow_conservative.glsl",
@@ -553,6 +566,8 @@ func _compile_shaders():
 	
 	shader_init = _load_shader(paths["init"])
 	shader_conv = _load_shader(paths["conv"])
+	shader_conv_h = _load_shader(paths["conv_h"])
+	shader_conv_v = _load_shader(paths["conv_v"])
 	shader_stats = _load_shader(paths["stats"])
 	shader_analysis = _load_shader(paths["analysis"])
 	shader_flow_conservative = _load_shader(paths["flow_con"])
@@ -565,6 +580,13 @@ func _compile_shaders():
 	
 	if not shader_conv.is_valid(): push_error("Shader Conv invalid")
 	else: pipeline_conv = rd.compute_pipeline_create(shader_conv)
+	
+	# Separable Convolution Pipelines
+	if not shader_conv_h.is_valid(): push_error("Shader Conv H invalid")
+	else: pipeline_conv_h = rd.compute_pipeline_create(shader_conv_h)
+	
+	if not shader_conv_v.is_valid(): push_error("Shader Conv V invalid")
+	else: pipeline_conv_v = rd.compute_pipeline_create(shader_conv_v)
 	
 	if not shader_stats.is_valid(): push_error("Shader Stats invalid")
 	else: pipeline_stats = rd.compute_pipeline_create(shader_stats)
@@ -687,6 +709,63 @@ func _create_set_conv(src_state: RID, src_genome: RID, src_sig: RID, src_genome_
 	
 	return rd.uniform_set_create([u_ubo, u_state, u_genome, u_sig, u_potential, u_genome_ext], shader_conv, 0)
 
+# === SEPARABLE CONVOLUTION UNIFORM SETS ===
+
+func _create_set_conv_h(src_state: RID, src_signal: RID, dst_intermediate: RID) -> RID:
+	var u_ubo = RDUniform.new()
+	u_ubo.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+	u_ubo.binding = 0
+	u_ubo.add_id(ubo)
+	
+	var u_state = RDUniform.new()
+	u_state.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	u_state.binding = 1
+	u_state.add_id(sampler_nearest)
+	u_state.add_id(src_state)
+	
+	var u_signal = RDUniform.new()
+	u_signal.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	u_signal.binding = 2
+	u_signal.add_id(sampler_nearest)
+	u_signal.add_id(src_signal)
+	
+	var u_intermediate = RDUniform.new()
+	u_intermediate.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	u_intermediate.binding = 3
+	u_intermediate.add_id(dst_intermediate)
+	
+	return rd.uniform_set_create([u_ubo, u_state, u_signal, u_intermediate], shader_conv_h, 0)
+
+func _create_set_conv_v(src_intermediate: RID, src_genome: RID, src_genome_ext: RID, dst_potential: RID) -> RID:
+	var u_ubo = RDUniform.new()
+	u_ubo.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+	u_ubo.binding = 0
+	u_ubo.add_id(ubo)
+	
+	var u_intermediate = RDUniform.new()
+	u_intermediate.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	u_intermediate.binding = 1
+	u_intermediate.add_id(sampler_nearest)
+	u_intermediate.add_id(src_intermediate)
+	
+	var u_genome = RDUniform.new()
+	u_genome.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	u_genome.binding = 2
+	u_genome.add_id(sampler_nearest)
+	u_genome.add_id(src_genome)
+	
+	var u_genome_ext = RDUniform.new()
+	u_genome_ext.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	u_genome_ext.binding = 3
+	u_genome_ext.add_id(sampler_nearest)
+	u_genome_ext.add_id(src_genome_ext)
+	
+	var u_potential = RDUniform.new()
+	u_potential.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	u_potential.binding = 4
+	u_potential.add_id(dst_potential)
+	
+	return rd.uniform_set_create([u_ubo, u_intermediate, u_genome, u_genome_ext, u_potential], shader_conv_v, 0)
 
 
 func _create_set_stats(tex_state: RID, tex_genome: RID, tex_genome_ext: RID) -> RID:

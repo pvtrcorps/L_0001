@@ -1,10 +1,10 @@
 #version 450
 
 // === OPTIMIZATION CONSTANTS ===
-// TILE_SIZE = WORKGROUP_SIZE + 2 * MAX_RADIUS
-// We use a fixed MAX_RADIUS to allocate shared memory. 
-// Requested R=16. We set SAFE limit to 20.
-#define WORKGROUP_SIZE 8
+// Phase 1 Optimizations:
+// - Workgroup 16×16 for better GPU occupancy (256 threads vs 64)
+// - Kernel LUT in shared memory to avoid redundant exp() calls
+#define WORKGROUP_SIZE 16
 #define MAX_RADIUS 20
 #define TILE_WIDTH (WORKGROUP_SIZE + 2 * MAX_RADIUS)
 #define TILE_AREA (TILE_WIDTH * TILE_WIDTH)

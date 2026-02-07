@@ -16,7 +16,7 @@ var params = {
 	"dt": 0.1,
 	"seed": 0.0,
 	# Kernel shape (global - creates pattern types)
-	"R": 8.0,           # Kernel radius in pixels
+	"R": 16.0,           # Kernel radius in pixels
 
 	# Initialization
 	"init_clusters": 16.0,
@@ -26,25 +26,26 @@ var params = {
 	# Advanced Physics (Flow Lenia style)
 	"temperature": 0.65,   # Advection diffusion (s). Paper default: 0.65 (Currently Standard Bilinear)
 	"theta_A": 1.0,        # Global Density Multiplier. Canonical ~1.0? (Was 5.0)
-	"alpha_n": 2.0,        # Repulsion Sharpness. Canonical: 2.0. (Was 0.0)
+	"alpha_n": 0.0,        # Repulsion Sharpness. Canonical: 2.0. (Was 0.0)
 	
 	# Signal Layer
 	"signal_diff": 1.0,    # Diffusion Rate
 	"signal_decay": 0.001,   # Decay Rate
 	"signal_advect": 1.0,  # Signal advection weight [0-1] (how much signals follow mass flow)
 	"flow_speed": 1.0,     # Multiplier for advection force (decopuled from dt)
-	"fluid_momentum": 1.0, # Momentum/Inertia (0.0 = Aristotelian, 1.0 = Newtonian)
+	"fluid_momentum": 0.0, # Momentum/Inertia (0.0 = Aristotelian, 1.0 = Newtonian)
 	
 	"beta_selection": 1.0, # Selection pressure for negotiation rule
 	
 	# Wind / Atmosphere
-	"wind_scale": 2.0,     # Noise scale
+	"wind_scale": 0.05,     # Noise scale
 	"wind_strength": 2.0,  # Wind force multiplier
 	"wind_speed": 0.05,     # Animation speed
 	
 	# Signal Advanced
 	"signal_force_strength": 20.0,   # Multiplier for signal gradient force
 	"signal_emission_strength": 1.0, # Multiplier for signal secretion quantity
+	"interaction_beta": 5.0,         # [NEW] Kernel Interaction Strength (0.0 = Neutral)
 	
 	# === GENE RANGES (16 GENES x 2 MIN/MAX) ===
 	# BLOCK A: Physiology (Body)
@@ -299,7 +300,7 @@ func _update_ubo():
 		params_time, params["wind_scale"], params["wind_strength"], params["wind_speed"],
 		
 		# Chunk 5 (Signal Extras) - [NEW]
-		params["signal_force_strength"], params["signal_emission_strength"], 0.0, 0.0
+		params["signal_force_strength"], params["signal_emission_strength"], params["interaction_beta"], 0.0
 	])
 	
 	var bytes = buffer.to_byte_array()

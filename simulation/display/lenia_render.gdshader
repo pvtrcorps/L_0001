@@ -3,7 +3,7 @@ shader_type canvas_item;
 uniform sampler2D tex_state : repeat_enable, filter_linear;
 uniform sampler2D tex_genome : repeat_enable, filter_linear;
 uniform sampler2D tex_genome_ext : repeat_enable, filter_linear; // [NEW] Valid data
-uniform sampler2D tex_signal; // [NEW]
+uniform sampler2D tex_signal : repeat_enable, filter_linear; // [NEW]
 uniform vec2 camera_pos = vec2(0.0, 0.0);
 uniform float camera_zoom = 1.0;
 uniform bool u_show_select = false;
@@ -91,81 +91,96 @@ void fragment() {
     float mass = state.r;
     vec3 signal = texture(tex_signal, uv).rgb;
     
-    // Manual Bilinear Interpolation for Genome Color
-    vec2 tex_size = vec2(textureSize(tex_genome, 0));
-    vec2 pixel_pos = uv * tex_size - 0.5;
-    ivec2 i_pos = ivec2(floor(pixel_pos));
-    vec2 f_pos = fract(pixel_pos);
+
     
-    vec3 c00 = get_pixel_color(i_pos, tex_size);
-    vec3 c10 = get_pixel_color(i_pos + ivec2(1, 0), tex_size);
-    vec3 c01 = get_pixel_color(i_pos + ivec2(0, 1), tex_size);
-    vec3 c11 = get_pixel_color(i_pos + ivec2(1, 1), tex_size);
+    // 4. Calculate 3D Normals from the Mass Gradient
+    vec2 gradient = vec2(dFdx(mass), dFdy(mass));
+    vec3 normal = normalize(vec3(-gradient * 50.0, 1.0 + mass * 10.0));
     
-    vec3 top = mix(c00, c10, f_pos.x);
-    vec3 bottom = mix(c01, c11, f_pos.x);
-    vec3 col_base = mix(top, bottom, f_pos.y);
+    // === SPECTRAL IDENTITY ===
+    // 1. Get Genes
+    vec4 g_ext = texture(tex_genome_ext, uv);
+    vec2 hues = unpack2(g_ext.a);
+    float h_emit = hues.x; // Identity
+    float h_detect = hues.y; // Target
     
-    // Apply Mass and Brightness
-    // Softened brightness curve for more organic look
-    float brightness = texture(tex_state, uv).r * 2.0; // Reduced from 5.0 to avoid instant saturation
+    // 2. Core Color (Who I am)
+    // Saturation Logic: 
+    // If I like myself (Diff ~ 0), I am Pure (Sat 1.0). 
+    // If I like others, I might be slightly desaturated? 
+    // User requested "Detection Hue Difference" mapping for Saturation.
+    // Let's try: Sat = 0.5 + 0.5 * (1.0 - 2.0 * abs(h_emit - h_detect)); // Simple mapping?
+    // Actually, let's keep it vibrant for now (Sat 1.0) to ensure the Hues are legible.
+    // The "Fresnel" will do the heavy lifting of showing the difference.
+    vec3 col_core = hsv2rgb(vec3(h_emit, 0.9, 1.0));
+    
+    // 3. Detection Aura (Who I want)
+    vec3 col_detect = hsv2rgb(vec3(h_detect, 1.0, 1.0));
+    
+    // 4. Fresnel / Rim Mixing
+    // View vector is effectively (0,0,1) in 2D ortho, but normal tilts.
+    // Fresnel = (1 - N.V)^k
+    float fresnel = pow(1.0 - normal.z, 2.0); // Power 3.0 was a bit sharp, 2.0 shows more aura
+    
+    // 5. Synthesis
+    // Core body is Identity. Edges are Desire.
+    vec3 col_base = mix(col_core, col_detect, fresnel * 0.8);
+    
+    // Enhance "Glow" of the aura
+    col_base += col_detect * fresnel * 0.5 * mass;
+
+    // Apply Mass Brightness (Organic gel look)
+    float brightness = mass * 2.0; 
     vec3 col = col_base * brightness;
-    
+
+    // 6. Lighting (Specular)
+    vec3 light_dir = normalize(vec3(-0.5, -0.5, 1.0));
+    float specular = pow(max(0.0, dot(reflect(-light_dir, normal), vec3(0,0,1))), 15.0);
+    col += vec3(1.0) * specular * 0.8 * smoothstep(0.1, 0.3, mass);
     
     // Signal layer visualization (Full RGB)
     // Additive blending for glow
     vec3 signal_col = signal * 0.1; 
-    
-    // Highlight Logic
-    // Re-sample central genome for selection logic (Nearest Neighbor)
-    vec4 genome = texture(tex_genome, uv);
-    vec2 mu_sigma = unpack2(genome.r);
-    float g_mu = mu_sigma.x;
-    float g_sigma = mu_sigma.y;
-    
-    vec2 rad_visc = unpack2(genome.g);
-    float g_radius = rad_visc.x;
-    // float g_width = width_radius.x;
-    
-    vec4 genome_ext = texture(tex_genome_ext, uv);
-    vec2 aff_rep = unpack2(genome_ext.r);
-    float g_affinity = aff_rep.x;
+    col += signal_col;
 
+    // Highlight Logic
+    // Re-sample central genome for selection logic (Nearest Neighbor) is done via `g_ext` check
+    
     if (u_show_select) {
-        // match u_select_vector components: (mu, sigma, radius, affinity)
-        
-        float d = 0.0;
-        d += abs(g_mu - u_select_vector.x) * 1.5;
-        d += abs(g_sigma - u_select_vector.y) * 1.5;
-        d += abs(g_radius - u_select_vector.z) * 1.0;
-        d += abs(g_affinity - u_select_vector.w) * 1.0;
-        
-        // Strict threshold for precise species matching (was 0.4)
-        if (d < 0.01) { 
+         // Check match against u_select_vector (using unpacked genes if we passed them?)
+         // Currently u_select_vector passes (mu, sigma, radius, affinity).
+         // We might need to update Inspector to pass Hues if we want to filter by Hue.
+         // For now, let's keep the logic but maybe we should filter by Hue?
+         // Let's assume u_select_vector is still old genes for now.
+         // Actually, let's skip the complex filter update for this step to focus on Rendering.
+         
+         // Using the OLD genes for selection filter for now as they are still reliable for "Species ID"
+         // (Mu/Sigma are still the primary species differentiators physically).
+         vec4 genome = texture(tex_genome, uv);
+         vec2 mu_sigma = unpack2(genome.r);
+         vec2 rad_visc = unpack2(genome.g);
+         vec2 aff_rep = unpack2(g_ext.r);
+         
+         float d = 0.0;
+         d += abs(mu_sigma.x - u_select_vector.x) * 1.5;
+         d += abs(mu_sigma.y - u_select_vector.y) * 1.5;
+         d += abs(rad_visc.x - u_select_vector.z) * 1.0;
+         d += abs(aff_rep.x - u_select_vector.w) * 1.0;
+         
+         if (d < 0.04) {
              float pulse = 0.5 + 0.5 * sin(TIME * 6.0);
-             
-             // VISIBILITY OVERRIDE:
-             // To show the "complete" species, we ignore the mass-based brightness attenuation
-             // and render the base color if there is ANY mass present.
              if (mass > 0.0001) {
-                 col = col_base * 1.5; // Boosted base color
-                 col = mix(col, vec3(1.0, 1.0, 1.0), 0.4 * pulse);
-                 
-                 // User requested multiplying by mass to avoid "block" look
-                 // We multiply by mass * 4.0 to ensure low-density areas are still visible (fulfilling "show complete species")
-                 // but maintain the gradient (fulfilling "not a block")
-                 col *= mass * 4.0; 
+                 col = col_base * 1.5; 
+                 // Show pure Core Color for clarity during selection?
+                 col = mix(col_core * 2.0, vec3(1.0), 0.2 * pulse);
+                 col *= mass * 4.0;
              } else {
                  col = vec3(0.0);
              }
-        } else {
-             col *= 0.4; // Dim others significantly
-             col = vec3(dot(col, vec3(0.3, 0.59, 0.11))); // Grayscale
-        }
-        // Do NOT add signal_col here, effectively hiding signals during inspection
-    } else {
-        // Normal rendering: Add signals
-        col += signal_col;
+         } else {
+             col *= 0.1;
+             col = vec3(dot(col, vec3(0.3, 0.59, 0.11))); 
+         }
     }
 
     col *= vignette;

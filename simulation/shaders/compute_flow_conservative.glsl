@@ -199,20 +199,35 @@ void main() {
     gradU *= (0.5 + g_affinity * 2.5);
     
     // B. Signal Gradient (Chemotaxis)
-    // Compute gradient of spectral similarity (U_signal)
-    ivec2 res_i = ivec2(p.u_res);
+    // Canonical Implementation: Gradient of (Signal . dot . Preference)
+    // We want to move towards the signal that matches our detection hue.
+    
+    vec3 myDetector = HueToRGB(g_detection_hue);
+    
+    // Sample Neighbors (RGB Signals)
     ivec2 l_uv = (uv_i + ivec2(-1, 0) + ivec2(p.u_res)) % ivec2(p.u_res);
     ivec2 r_uv = (uv_i + ivec2(1, 0) + ivec2(p.u_res)) % ivec2(p.u_res);
     ivec2 u_uv = (uv_i + ivec2(0, -1) + ivec2(p.u_res)) % ivec2(p.u_res);
     ivec2 d_uv = (uv_i + ivec2(0, 1) + ivec2(p.u_res)) % ivec2(p.u_res);
     
-    float sL = texelFetch(tex_potential, l_uv, 0).a;
-    float sR = texelFetch(tex_potential, r_uv, 0).a;
-    float sU = texelFetch(tex_potential, u_uv, 0).a;
-    float sD = texelFetch(tex_potential, d_uv, 0).a;
-    vec2 gradSignal = vec2(sR - sL, sD - sU);
+    vec3 sigL = texelFetch(tex_signal, l_uv, 0).rgb;
+    vec3 sigR = texelFetch(tex_signal, r_uv, 0).rgb;
+    vec3 sigU = texelFetch(tex_signal, u_uv, 0).rgb;
+    vec3 sigD = texelFetch(tex_signal, d_uv, 0).rgb;
     
-    vec2 totalAttraction = gradU + gradSignal * p.u_signal_advect * (g_sensitivity * p.u_signal_force_strength);
+    // Convert to Scalar Potential (How much I like it)
+    float pL = dot(sigL, myDetector);
+    float pR = dot(sigR, myDetector);
+    float pU = dot(sigU, myDetector);
+    float pD = dot(sigD, myDetector);
+    
+    // Compute Gradient (Central Difference)
+    vec2 gradSignal = vec2(pR - pL, pD - pU); // * 0.5 technically, but force tuning handles it
+    
+    // Apply Signal Force
+    // g_sensitivity: Genetic trait [0-1]
+    // u_signal_force_strength: Global multiplier
+    vec2 totalAttraction = gradU + gradSignal * (g_sensitivity * p.u_signal_force_strength);
     
     // C. Density Gradient (Repulsion)
     // High density pressure

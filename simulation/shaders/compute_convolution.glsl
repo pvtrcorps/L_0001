@@ -8,6 +8,7 @@
 #define MAX_RADIUS 20
 #define TILE_WIDTH (WORKGROUP_SIZE + 2 * MAX_RADIUS)
 #define TILE_AREA (TILE_WIDTH * TILE_WIDTH)
+#define PI 3.14159265359
 
 layout(local_size_x = WORKGROUP_SIZE, local_size_y = WORKGROUP_SIZE, local_size_z = 1) in;
 
@@ -48,7 +49,7 @@ layout(set = 0, binding = 0, std430) buffer Params {
     // Signal Extras
     float u_signal_force_strength;
     float u_signal_emission_strength;
-    float u_pad1;
+    float u_interaction_beta; // [NEW] Interaction Strength
     float u_pad2;
 } p;
 
@@ -59,8 +60,8 @@ layout(set = 0, binding = 4, rgba32f) uniform image2D img_potential;
 layout(set = 0, binding = 5) uniform sampler2D tex_genome_ext; // Genes 9-16 [NEW]
 
 // === SHARED MEMORY ===
-// Stores: .r = Mass, .gba = Signal (RGB)
-shared vec4 tile_cache[TILE_AREA];
+// Stores: .x = Mass, .y = Emission Hue (Identity)
+shared vec2 tile_cache[TILE_AREA];
 
 vec2 unpack2(float packed) {
     uint bits = floatBitsToUint(packed) & ~0x40000000u; // Clear normalized bit
@@ -109,6 +110,28 @@ vec3 HueToRGB(float hue) {
     return rgb;
 }
 
+// === INTERACTION FUNCTION ===
+// Returns affinity multiplier [0.0, 2.0] based on genetic match
+// my_target: The Hue I want to see (Detection)
+// their_id: The Hue they are (Emission)
+// beta: Strength of preference
+float get_interaction_affinity(float my_target, float their_id, float beta) {
+    if (beta <= 0.001) return 1.0;
+    
+    // Circular difference [0, 1]
+    float diff = abs(my_target - their_id);
+    if (diff > 0.5) diff = 1.0 - diff;
+    
+    // Cosine similarity mapped to modulation
+    // If diff = 0 (Match) -> cos(0) = 1 -> Return 1 + beta
+    // If diff = 0.5 (Opposite) -> cos(PI) = -1 -> Return 1 - beta
+    float match = cos(2.0 * PI * diff);
+    
+    // Result range: [1-beta, 1+beta]
+    // If beta=1, Range [0, 2].
+    return 1.0 + beta * match;
+}
+
 void main() {
     ivec2 res_i = ivec2(p.u_res);
     ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
@@ -139,11 +162,21 @@ void main() {
         global_pos = (global_pos % res_i + res_i) % res_i;
         
         // Fetch Global Memory
+        // 1. Mass
         float mass = texelFetch(tex_state, global_pos, 0).r;
-        vec3 sig = texelFetch(tex_signal, global_pos, 0).rgb;
+        
+        // 2. Emission Hue (Identity) from Genome Ext (Genes 9-16)
+        // Texture packs 4 channels. 
+        // We know from LeniaSimulation that params["g_emission_hue"] is Gene 15.
+        // Gene 15/16 are in Bound Texture 'tex_genome_ext' Channel Alpha.
+        vec4 g_ext_packed = texelFetch(tex_genome_ext, global_pos, 0);
+        
+        // Unpack Alpha channel to get (Emission, Detection)
+        vec2 hues = unpack2(g_ext_packed.a);
+        float emission_hue = hues.x; // Gene 15
         
         // Store in Shared Memory
-        tile_cache[i] = vec4(mass, sig);
+        tile_cache[i] = vec2(mass, emission_hue);
     }
     
     // Wait for all threads to finish loading
@@ -176,15 +209,8 @@ void main() {
     float g_radius = rad_visc.x; 
     
     vec2 hue_hue = unpack2(g2.a);
-    float g_detection_hue = hue_hue.y;
-    
-    // === SPECTRAL SIGNAL ===
-    vec3 myDetector = HueToRGB(g_detection_hue);
-    vec3 mySignal = texture(tex_signal, uv).rgb; // Start Center Self?
-    // Actually we only need convolution results for signal, not center.
-    // But let's check old logic...
-    // "U_signal = dot(signalVec, myDetector)" was calculated but unused in loop. 
-    // The loop used neighbors.
+    float my_emission_hue = hue_hue.x; // My Identity (Gene 15)
+    float g_detection_hue = hue_hue.y; // My Target Hue (Gene 16)
     
     // === PREPARE KERNEL ===
     float R_actual = max(p.u_R * g_radius, 1.0);
@@ -212,7 +238,6 @@ void main() {
     int loopR = int(ceil(R_actual));
     
     float sum = 0.0;
-    float sumSignal = 0.0;
     float totalWeight = 0.0;
     
     // Our position within the tile
@@ -231,29 +256,41 @@ void main() {
             // Flatten index
             int idx = ty * TILE_WIDTH + tx;
             
-            vec4 cell_data = tile_cache[idx];
-            float neighborMass = cell_data.r;
-            vec3 neighborSignal = cell_data.gba;
+            vec2 cell_data = tile_cache[idx];
+            float neighborMass = cell_data.x;
+            float neighborHue = cell_data.y; // Their Identity
             
             float dist = length(vec2(float(dx), float(dy)));
             
             float w = eval_kernel(dist, R_actual, kp);
            
             if (w > 0.0001) {
-                // Compute Match
-                float signalMatch = dot(neighborSignal, myDetector);
-                float totalIntensity = dot(neighborSignal, vec3(1.0));
-                float signedScore = 2.0 * signalMatch - totalIntensity;
+                // === KERNEL INTERACTION ===
                 
-                sum += neighborMass * w;
-                sumSignal += signedScore * w;
-                totalWeight += w;
+                // 1. IDENTITY CHECK (Self/Kin Recognition)
+                // Compare MY Identity (Emission) vs THEIR Identity (Emission)
+                float genetic_dist = abs(my_emission_hue - neighborHue);
+                if (genetic_dist > 0.5) genetic_dist = 1.0 - genetic_dist;
+                
+                float affinity = 1.0;
+                
+                if (genetic_dist < 0.1) {
+                    // SAME SPECIES: Standard Physics (Affinity = 1.0)
+                    // We ignore our "Target Preference" when dealing with family.
+                    affinity = 1.0; 
+                } else {
+                    // DIFFERENT SPECIES: Apply Interaction Rule
+                    // Compare MY Target (Detection) vs THEIR Identity (Emission)
+                    affinity = get_interaction_affinity(g_detection_hue, neighborHue, p.u_interaction_beta);
+                }
+                
+                sum += neighborMass * w * affinity;
+                totalWeight += w; // Normalize by PHYSICAL weight
             }
         }
     }
     
     float U_raw = (totalWeight > 0.0) ? sum / totalWeight : 0.0;
-    float U_signal_smooth = (totalWeight > 0.0) ? sumSignal / totalWeight : 0.0;
     
     // === GROWTH G(U) ===
     float mu = g_mu; 
@@ -263,5 +300,9 @@ void main() {
     float exp_term = exp(-0.5 * (diff * diff) / max(sigma * sigma, 0.0001));
     float U_growth = 2.0 * exp_term - 1.0; 
     
-    imageStore(img_potential, gid, vec4(U_growth, 0.0, 0.0, U_signal_smooth));
+    // Output:
+    // R: Growth Potential (G(U))
+    // A: Signal Potential (Now 0.0, disabled signal force)
+    imageStore(img_potential, gid, vec4(U_growth, 0.0, 0.0, 0.0));
 }
+

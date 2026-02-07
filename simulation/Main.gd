@@ -24,10 +24,10 @@ var ui_schema = {
 	"Flow Physics": [
 		["temperature", "Temperature (s)", 0.0, 3.0, 0.05],
 		["theta_A", "Global Density Mult", 0.1, 10.0, 0.1],
-		["alpha_n", "Repulsion Sharpness (n)", 0.0, 2.0, 0.1],
+		["alpha_n", "Repulsion Sharpness (n)", 0.0, 1.0, 0.1],
 		["beta_selection", "Selection Pressure (β)", 0.0, 3.0, 0.1],
-		["beta_selection", "Selection Pressure (β)", 0.0, 3.0, 0.1],
-		["flow_speed", "Flow Speed", 1.0, 10.0, 0.5],
+		["interaction_beta", "Kernel Interaction (β)", 0.0, 10.0, 0.1],
+		["flow_speed", "Flow Speed", 0.0, 10.0, 0.5],
 		["fluid_momentum", "Fluid Inertia", 0.0, 1.0, 0.05]
 	],
 	"Chemical Signal": [
@@ -38,7 +38,7 @@ var ui_schema = {
 		["signal_emission_strength", "Signal Emission (Volume)", 0.0, 20.0, 0.1]
 	],
 	"Wind / Atmosphere": [
-		["wind_scale", "Wind Scale", 0.1, 10.0, 0.1],
+		["wind_scale", "Wind Scale", 0.0, 10.0, 0.1],
 		["wind_strength", "Wind Strength", 0.0, 5.0, 0.05],
 		["wind_speed", "Wind Speed", 0.0, 2.0, 0.05]
 	],

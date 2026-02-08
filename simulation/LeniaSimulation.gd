@@ -19,7 +19,7 @@ var params = {
 	"R": 16.0,           # Kernel radius in pixels
 
 	# Initialization
-	"init_clusters": 16.0,
+	"init_clusters": 24.0,
 	"init_density": 1.0,   # Higher density for better start
 	
 	# Advanced Physics (Flow Lenia style)
@@ -29,29 +29,30 @@ var params = {
 	"alpha_n": 0.0,        # Repulsion Sharpness. Canonical: 2.0. (Was 0.0)
 	
 	# Signal Layer
-	"signal_diff": 1.0,    # Diffusion Rate
+	"signal_diff": 0.0,    # Diffusion Rate
 	"signal_decay": 0.001,   # Decay Rate
 	"signal_advect": 1.0,  # Signal advection weight [0-1] (how much signals follow mass flow)
-	"flow_speed": 1.0,     # Multiplier for advection force (decopuled from dt)
-	"fluid_momentum": 0.0, # Momentum/Inertia (0.0 = Aristotelian, 1.0 = Newtonian)
+	"flow_speed": 5.0,     # Multiplier for advection force (decopuled from dt)
+	"fluid_momentum": 0.5, # Momentum/Inertia (0.0 = Aristotelian, 1.0 = Newtonian)
 	
 	"beta_selection": 1.0, # Selection pressure for negotiation rule
 	
 	# Wind / Atmosphere
-	"wind_scale": 0.05,     # Noise scale
+	"wind_scale": 10.00,     # Noise scale
 	"wind_strength": 2.0,  # Wind force multiplier
-	"wind_speed": 0.05,     # Animation speed
+	"wind_speed": 0.1,     # Animation speed
 	
 	# Signal Advanced
 	"signal_force_strength": 20.0,   # Multiplier for signal gradient force
 	"signal_emission_strength": 1.0, # Multiplier for signal secretion quantity
-	"interaction_beta": 5.0,         # [NEW] Kernel Interaction Strength (0.0 = Neutral)
+	"interaction_beta": 1.0,         # [NEW] Kernel Interaction Strength (0.0 = Neutral)
+	"genetic_barrier": 1.0,          # [NEW] Genetic Flow Barrier (0.0 = Permeable, 1.0 = Impermeable)
 	
 	# === GENE RANGES (16 GENES x 2 MIN/MAX) ===
 	# BLOCK A: Physiology (Body)
 	"g_mu_min": 0.0, "g_mu_max": 1.0,      # 1. Growth Target Density
 	"g_sigma_min": 0.0, "g_sigma_max": 1.0,# 2. Growth Stability
-	"g_radius_min": 0.75, "g_radius_max": 1.0,# 3. Size (Scale)
+	"g_radius_min": 0.0, "g_radius_max": 1.0,# 3. Size (Scale)
 	"g_viscosity_min": 0.0, "g_viscosity_max": 1.0, # 4. Viscosity (Drag/Friction)
 	
 	# BLOCK B: Morphology (Shape)
@@ -61,7 +62,7 @@ var params = {
 	"g_inertia_min": 0.0, "g_inertia_max": 1.0, # 8. Inertial Mass
 	
 	# BLOCK C: Social & Motor (Mind)
-	"g_affinity_min": 1.0, "g_affinity_max": 1.0, # 9. Cohesion
+	"g_affinity_min": 0.0, "g_affinity_max": 1.0, # 9. Cohesion
 	"g_repulsion_min": 0.0, "g_repulsion_max": 1.0, # 10. Spacing
 	"g_density_tol_min": 0.0, "g_density_tol_max": 1.0, # 11. Overcrowding Tol
 	"g_mobility_min": 0.0, "g_mobility_max": 1.0, # 12. Speed Base
@@ -300,7 +301,7 @@ func _update_ubo():
 		params_time, params["wind_scale"], params["wind_strength"], params["wind_speed"],
 		
 		# Chunk 5 (Signal Extras) - [NEW]
-		params["signal_force_strength"], params["signal_emission_strength"], params["interaction_beta"], 0.0
+		params["signal_force_strength"], params["signal_emission_strength"], params["interaction_beta"], params["genetic_barrier"]
 	])
 	
 	var bytes = buffer.to_byte_array()

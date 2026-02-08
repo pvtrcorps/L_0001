@@ -27,6 +27,7 @@ var ui_schema = {
 		["alpha_n", "Repulsion Sharpness (n)", 0.0, 1.0, 0.1],
 		["beta_selection", "Selection Pressure (β)", 0.0, 3.0, 0.1],
 		["interaction_beta", "Kernel Interaction (β)", 0.0, 10.0, 0.1],
+		["genetic_barrier", "Genetic Barrier (Inmiscibility)", 0.0, 1.0, 0.05],
 		["flow_speed", "Flow Speed", 0.0, 10.0, 0.5],
 		["fluid_momentum", "Fluid Inertia", 0.0, 1.0, 0.05]
 	],

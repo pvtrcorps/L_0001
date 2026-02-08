@@ -50,7 +50,7 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_signal_force_strength;
     float u_signal_emission_strength;
     float u_interaction_beta; // [NEW] Interaction Strength
-    float u_pad2;
+    float u_genetic_barrier;  // [NEW] Genetic Flow Barrier
 } p;
 
 layout(set = 0, binding = 1) uniform sampler2D tex_state;
@@ -110,26 +110,38 @@ vec3 HueToRGB(float hue) {
     return rgb;
 }
 
-// === INTERACTION FUNCTION ===
-// Returns affinity multiplier [0.0, 2.0] based on genetic match
-// my_target: The Hue I want to see (Detection)
-// their_id: The Hue they are (Emission)
-// beta: Strength of preference
-float get_interaction_affinity(float my_target, float their_id, float beta) {
-    if (beta <= 0.001) return 1.0;
-    
-    // Circular difference [0, 1]
-    float diff = abs(my_target - their_id);
+// === INTERACTION FUNCTIONS ===
+
+// ASYMMETRIC INTERACTION STRENGTH [-1, +1]
+// Returns how much I (my_detection) am attracted to them (their_emission)
+// This is ASYMMETRIC: A→B ≠ B→A because each has different detection_hue
+// 
+// my_detection: What hue I'm looking for (Gene 16)
+// their_emission: What hue they broadcast (Gene 15)
+// 
+// Returns:
+//   +1 = Maximum attraction (their emission matches my detection perfectly)
+//   0  = Neutral (90° apart in hue space)
+//   -1 = Maximum repulsion (their emission is opposite to what I detect)
+float get_interaction_strength(float my_detection, float their_emission) {
+    // Circular distance in hue space [0, 0.5]
+    float diff = abs(my_detection - their_emission);
     if (diff > 0.5) diff = 1.0 - diff;
     
-    // Cosine similarity mapped to modulation
-    // If diff = 0 (Match) -> cos(0) = 1 -> Return 1 + beta
-    // If diff = 0.5 (Opposite) -> cos(PI) = -1 -> Return 1 - beta
-    float match = cos(2.0 * PI * diff);
-    
-    // Result range: [1-beta, 1+beta]
-    // If beta=1, Range [0, 2].
-    return 1.0 + beta * match;
+    // Map to interaction: 
+    // diff = 0 (perfect match) → cos(0) = +1 (attraction)
+    // diff = 0.25 (90° apart) → cos(π/2) = 0 (neutral)
+    // diff = 0.5 (opposite) → cos(π) = -1 (repulsion)
+    return cos(2.0 * PI * diff);
+}
+
+// LEGACY: Affinity multiplier [0, 2] for backward compatibility
+// Only used where we need always-positive weights
+float get_interaction_affinity(float my_target, float their_id, float beta) {
+    if (beta <= 0.001) return 1.0;
+    float strength = get_interaction_strength(my_target, their_id);
+    // Map [-1, +1] to [1-beta, 1+beta]
+    return 1.0 + beta * strength;
 }
 
 void main() {
@@ -237,12 +249,18 @@ void main() {
     
     int loopR = int(ceil(R_actual));
     
-    float sum = 0.0;
-    float totalWeight = 0.0;
+    // === TRI-POTENTIAL SYSTEM ===
+    // sumKin: Mass from SAME species (for growth physics)
+    // sumAll: Mass from ALL species (for density awareness)
+    // sumInteract: Weighted interaction potential (attraction/repulsion)
+    float sumKin = 0.0;
+    float sumAll = 0.0;
+    float sumInteract = 0.0;  // Can be negative (repulsion) or positive (attraction)
+    float weightKin = 0.0;
+    float weightAll = 0.0;
+    float weightInteract = 0.0;
     
     // Our position within the tile
-    // lid is (0..7), tile starts at -MAX_RADIUS.
-    // So our index in tile is (lid.x + MAX_RADIUS, lid.y + MAX_RADIUS)
     ivec2 my_tile_pos = lid + ivec2(MAX_RADIUS);
     
     // Loop only the necessary radius
@@ -252,57 +270,69 @@ void main() {
             // Shared Memory Lookup
             int tx = my_tile_pos.x + dx;
             int ty = my_tile_pos.y + dy;
-            
-            // Flatten index
             int idx = ty * TILE_WIDTH + tx;
             
             vec2 cell_data = tile_cache[idx];
             float neighborMass = cell_data.x;
-            float neighborHue = cell_data.y; // Their Identity
+            float neighborHue = cell_data.y; // Their Emission Hue (Identity)
             
             float dist = length(vec2(float(dx), float(dy)));
-            
             float w = eval_kernel(dist, R_actual, kp);
            
-            if (w > 0.0001) {
-                // === KERNEL INTERACTION ===
-                
+            if (w > 0.0001 && neighborMass > 0.0001) {
                 // 1. IDENTITY CHECK (Self/Kin Recognition)
-                // Compare MY Identity (Emission) vs THEIR Identity (Emission)
                 float genetic_dist = abs(my_emission_hue - neighborHue);
                 if (genetic_dist > 0.5) genetic_dist = 1.0 - genetic_dist;
                 
-                float affinity = 1.0;
+                // Always accumulate ALL mass for density
+                sumAll += neighborMass * w;
+                weightAll += w;
                 
                 if (genetic_dist < 0.1) {
-                    // SAME SPECIES: Standard Physics (Affinity = 1.0)
-                    // We ignore our "Target Preference" when dealing with family.
-                    affinity = 1.0; 
+                    // SAME SPECIES: Full contribution to kin potential
+                    sumKin += neighborMass * w;
+                    weightKin += w;
+                    // No interaction with self (neutral)
                 } else {
-                    // DIFFERENT SPECIES: Apply Interaction Rule
-                    // Compare MY Target (Detection) vs THEIR Identity (Emission)
-                    affinity = get_interaction_affinity(g_detection_hue, neighborHue, p.u_interaction_beta);
+                    // DIFFERENT SPECIES: Calculate asymmetric interaction
+                    // strength = how much I'm attracted (+) or repelled (-) by them
+                    float strength = get_interaction_strength(g_detection_hue, neighborHue);
+                    
+                    // Modulate kin potential (backward compatible)
+                    float affinity = 1.0 + p.u_interaction_beta * strength;
+                    sumKin += neighborMass * w * max(affinity, 0.0);
+                    weightKin += w;
+                    
+                    // Accumulate interaction potential (NEW!)
+                    // This captures the raw attraction/repulsion field
+                    sumInteract += neighborMass * w * strength;
+                    weightInteract += w;
                 }
-                
-                sum += neighborMass * w * affinity;
-                totalWeight += w; // Normalize by PHYSICAL weight
             }
         }
     }
     
-    float U_raw = (totalWeight > 0.0) ? sum / totalWeight : 0.0;
-    
-    // === GROWTH G(U) ===
+    // === GROWTH POTENTIAL (Kin-based) ===
+    float U_kin = (weightKin > 0.0) ? sumKin / weightKin : 0.0;
     float mu = g_mu; 
     float sigma = 0.001 + g_sigma * 0.2; 
-    
-    float diff = (U_raw - mu);
+    float diff = (U_kin - mu);
     float exp_term = exp(-0.5 * (diff * diff) / max(sigma * sigma, 0.0001));
     float U_growth = 2.0 * exp_term - 1.0; 
     
+    // === DENSITY POTENTIAL (All species) ===
+    float U_density = (weightAll > 0.0) ? sumAll / weightAll : 0.0;
+    
+    // === INTERACTION POTENTIAL (Attraction/Repulsion field) ===
+    // Positive = net attraction nearby, Negative = net repulsion nearby
+    float U_interact = (weightInteract > 0.0) ? sumInteract / weightInteract : 0.0;
+    // Scale by beta for controllable strength
+    U_interact *= p.u_interaction_beta;
+    
     // Output:
-    // R: Growth Potential (G(U))
-    // A: Signal Potential (Now 0.0, disabled signal force)
-    imageStore(img_potential, gid, vec4(U_growth, 0.0, 0.0, 0.0));
+    // R: Growth Potential G(U) - based on kin
+    // G: Total Density U_all - for crowding avoidance
+    // B: Interaction Potential - for attraction/repulsion movement
+    imageStore(img_potential, gid, vec4(U_growth, U_density, U_interact, 0.0));
 }
 

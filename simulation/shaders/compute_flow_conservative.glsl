@@ -40,8 +40,8 @@ layout(set = 0, binding = 0, std430) buffer Params {
     // Signal Extras
     float u_signal_force_strength;
     float u_signal_emission_strength;
-    float u_pad1;
-    float u_pad2;
+    float u_interaction_beta; // [NEW] Interaction Strength
+    float u_genetic_barrier;  // [NEW] Genetic Flow Barrier
 } p;
 
 layout(set = 0, binding = 1) uniform sampler2D tex_state;
@@ -168,14 +168,16 @@ void main() {
     float g_sensitivity = sig_gain.y; // [0-1] Signal Gain
     
     vec2 hues = unpack2(g2.a);
+    float g_emission_hue = hues.x;  // [0-1] My Color / Emission Hue
     float g_detection_hue = hues.y; // [0-1] Target Signal
     
     // === 2. Calculate Forces ===
     
-    // A. Mass Potential Gradient (Attraction / Growth Direction)
-    // A. Mass Potential Gradient (Attraction / Growth Direction)
-    // Sobel Filter for dU/dx, dU/dy (Canonical)
+    // A. Growth Potential Gradient (Attraction toward kin)
+    // Uses tex_potential.R = G(U) from KIN-based convolution
     vec2 pixel_size = 1.0 / p.u_res;
+    
+    // Sobel Filter for Growth Potential (R channel)
     float gx = 0.0;
     gx += -1.0 * texture(tex_potential, uv + vec2(-1, -1)*pixel_size).r;
     gx += -2.0 * texture(tex_potential, uv + vec2(-1,  0)*pixel_size).r;
@@ -192,13 +194,55 @@ void main() {
     gy +=  2.0 * texture(tex_potential, uv + vec2( 0,  1)*pixel_size).r;
     gy +=  1.0 * texture(tex_potential, uv + vec2( 1,  1)*pixel_size).r;
     
-    vec2 gradU = vec2(gx, gy);
+    vec2 gradGrowth = vec2(gx, gy);
     
-    // APPLY AFFINITY (Cohesion)
-    // High affinity = Follows potential gradient strongly (Clumps)
-    gradU *= (0.5 + g_affinity * 2.5);
+    // B. Density Potential Gradient (Repulsion from ALL species)
+    // Uses tex_potential.G = U_density from ALL-species convolution
+    float dx = 0.0;
+    dx += -1.0 * texture(tex_potential, uv + vec2(-1, -1)*pixel_size).g;
+    dx += -2.0 * texture(tex_potential, uv + vec2(-1,  0)*pixel_size).g;
+    dx += -1.0 * texture(tex_potential, uv + vec2(-1,  1)*pixel_size).g;
+    dx +=  1.0 * texture(tex_potential, uv + vec2( 1, -1)*pixel_size).g;
+    dx +=  2.0 * texture(tex_potential, uv + vec2( 1,  0)*pixel_size).g;
+    dx +=  1.0 * texture(tex_potential, uv + vec2( 1,  1)*pixel_size).g;
     
-    // B. Signal Gradient (Chemotaxis)
+    float dy = 0.0;
+    dy += -1.0 * texture(tex_potential, uv + vec2(-1, -1)*pixel_size).g;
+    dy += -2.0 * texture(tex_potential, uv + vec2( 0, -1)*pixel_size).g;
+    dy += -1.0 * texture(tex_potential, uv + vec2( 1, -1)*pixel_size).g;
+    dy +=  1.0 * texture(tex_potential, uv + vec2(-1,  1)*pixel_size).g;
+    dy +=  2.0 * texture(tex_potential, uv + vec2( 0,  1)*pixel_size).g;
+    dy +=  1.0 * texture(tex_potential, uv + vec2( 1,  1)*pixel_size).g;
+    
+    vec2 gradDensity = vec2(dx, dy);
+    
+    // C. Interaction Gradient (Attraction/Repulsion from other species)
+    // Uses tex_potential.B = U_interact from convolution
+    // Positive values = attraction, Negative = repulsion
+    float ix = 0.0;
+    ix += -1.0 * texture(tex_potential, uv + vec2(-1, -1)*pixel_size).b;
+    ix += -2.0 * texture(tex_potential, uv + vec2(-1,  0)*pixel_size).b;
+    ix += -1.0 * texture(tex_potential, uv + vec2(-1,  1)*pixel_size).b;
+    ix +=  1.0 * texture(tex_potential, uv + vec2( 1, -1)*pixel_size).b;
+    ix +=  2.0 * texture(tex_potential, uv + vec2( 1,  0)*pixel_size).b;
+    ix +=  1.0 * texture(tex_potential, uv + vec2( 1,  1)*pixel_size).b;
+    
+    float iy = 0.0;
+    iy += -1.0 * texture(tex_potential, uv + vec2(-1, -1)*pixel_size).b;
+    iy += -2.0 * texture(tex_potential, uv + vec2( 0, -1)*pixel_size).b;
+    iy += -1.0 * texture(tex_potential, uv + vec2( 1, -1)*pixel_size).b;
+    iy +=  1.0 * texture(tex_potential, uv + vec2(-1,  1)*pixel_size).b;
+    iy +=  2.0 * texture(tex_potential, uv + vec2( 0,  1)*pixel_size).b;
+    iy +=  1.0 * texture(tex_potential, uv + vec2( 1,  1)*pixel_size).b;
+    
+    // gradInteract points toward positive interaction (attraction)
+    // We FOLLOW this gradient to move toward attraction, away from repulsion
+    vec2 gradInteract = vec2(ix, iy);
+    
+    // APPLY AFFINITY (Cohesion toward kin growth potential)
+    gradGrowth *= (0.5 + g_affinity * 2.5);
+    
+    // D. Signal Gradient (Chemotaxis)
     // Canonical Implementation: Gradient of (Signal . dot . Preference)
     // We want to move towards the signal that matches our detection hue.
     
@@ -222,33 +266,37 @@ void main() {
     float pD = dot(sigD, myDetector);
     
     // Compute Gradient (Central Difference)
-    vec2 gradSignal = vec2(pR - pL, pD - pU); // * 0.5 technically, but force tuning handles it
+    vec2 gradSignal = vec2(pR - pL, pD - pU);
     
-    // Apply Signal Force
-    // g_sensitivity: Genetic trait [0-1]
-    // u_signal_force_strength: Global multiplier
-    vec2 totalAttraction = gradU + gradSignal * (g_sensitivity * p.u_signal_force_strength);
+    // === TOTAL ATTRACTION ===
+    // gradGrowth: Move toward kin (growth potential)
+    // gradSignal: Move toward preferred signals
+    // gradInteract: Move toward attraction / away from repulsion (NEW!)
+    vec2 totalAttraction = gradGrowth 
+                         + gradSignal * (g_sensitivity * p.u_signal_force_strength)
+                         + gradInteract * (0.5 + g_repulsion * 2.5);
     
-    // C. Density Gradient (Repulsion)
-    // High density pressure
+    // E. Local Density Pressure (Same-species crowding)
+    // This is the classic Lenia repulsion from local mass
     float mR = texelFetch(tex_state, r_uv, 0).r;
     float mL = texelFetch(tex_state, l_uv, 0).r;
     float mD = texelFetch(tex_state, d_uv, 0).r;
     float mU = texelFetch(tex_state, u_uv, 0).r;
-    vec2 gradA = vec2(mR - mL, mD - mU);
+    vec2 gradLocalDensity = vec2(mR - mL, mD - mU);
     
-    gradA *= (0.5 + g_repulsion * 2.5);
-    
-    // D. Compute Velocity Field
+    // F. Compute Velocity Field
     vec2 shape_c_inertia = unpack2(g1.a);
     float g_inertia = shape_c_inertia.y;
 
-    // D. Compute Acceleration
+    // Density tolerance threshold
     float local_theta = p.u_theta_A * (0.5 + g_density_tol * 2.0);
     float alpha = pow(max(myMass, 0.0) / max(local_theta, 0.001), p.u_alpha_n);
     
+    // === FINAL FORCE CALCULATION ===
+    // 1. totalAttraction: Pull toward kin, signals, AND attractive species
+    // 2. alpha * gradLocalDensity: Push away from local crowding
     float force_mult = p.u_flow_speed * (0.2 + g_mobility * 1.8);
-    vec2 force = force_mult * (totalAttraction - alpha * gradA);
+    vec2 force = force_mult * (totalAttraction - alpha * gradLocalDensity);
     
     // === INERTIAL INTEGRATION ===
     vec2 old_vel = state.gb;
@@ -265,7 +313,7 @@ void main() {
     vec2 vel = integrated_vel;
     
     
-    // === 3. Mass Advection (Scatter) ===
+    // === 3. Mass Advection (Scatter with Genetic Barrier) ===
     vec2 pos_next = uv * p.u_res + vel * p.u_dt;
     pos_next = mod(pos_next, p.u_res);
     
@@ -285,12 +333,10 @@ void main() {
     
     // Mass Accumulation (High Precision)
     uint total_amount = uint(myMass * MASS_SCALE);
+    uint kept_mass = 0u; // Mass blocked by barrier
     
     if (total_amount > 0) {
-        // SAFE PARTITIONING (Cascade Remainder)
-        // Prevents underflow where a00+a10+a01 > total (due to float rounding up)
-        // forcing a11 to wrap around to uint_max (Mass Explosion).
-        
+        // SAFE PARTITIONING Logic...
         uint remaining = total_amount;
         
         uint a00 = uint(float(total_amount) * w00);
@@ -305,29 +351,114 @@ void main() {
         if (a01 > remaining) a01 = remaining;
         remaining -= a01;
         
-        uint a11 = remaining; // The rest goes here
+        uint a11 = remaining; 
+
+        // BARRIER FUNCTION
+        // Checks if mass can flow to target. If not, adds to kept_mass.
+        // We only check barrier if feature is enabled (u_genetic_barrier > 0)
         
-        if (a00 > 0) imageAtomicAdd(img_mass_accum, c00, a00);
-        if (a10 > 0) imageAtomicAdd(img_mass_accum, c10, a10);
-        if (a01 > 0) imageAtomicAdd(img_mass_accum, c01, a01);
-        if (a11 > 0) imageAtomicAdd(img_mass_accum, c11, a11);
+        float barrier = p.u_genetic_barrier;
+        bool barrier_active = barrier > 0.01;
         
-        // WINNER TRACKING
-        uint src_idx = uint(uv_i.y) * uint(p.u_res.x) + uint(uv_i.x);
-        src_idx = src_idx & 0xFFFFFFu; 
+        // --- Target 00 ---
+        if (a00 > 0) {
+            bool blocked = false;
+            if (barrier_active) {
+                float dst_mass = texelFetch(tex_state, c00, 0).r;
+                if (dst_mass > 0.05) { // Only check if significant mass exists
+                     float dst_hue = texelFetch(tex_genome, c00, 0).a; // Hue is in Alpha of tex_genome (Gene 4 or 8?)
+                     // Actually Hue is Gene 15 (Emission Hue). 
+                     // tex_genome has Genes 1-4 (RGBA). tex_genome_ext has 9-12 (RGBA) and 13-16 (RGBA in B channel?)
+                     // WAIT: We need to know where Emission Hue is.
+                     // Params: g_emission_hue is Gene 15.
+                     // In compute_convolution, we unpack it from channel A of tex_genome_ext?
+                     // Let's verify packing. Assumed Gene 15 is in tex_genome_ext.
+                     // But here we might not have easy access if packing is complex.
+                     // SIMPLIFICATION: We use tex_genome.a as a proxy for identity if not sure, 
+                     // OR we just use the raw value stored in channel used for color.
+                     // Let's assume Gene 4 (Viscosity) or something else?
+                     // Actually, let's look at compute_convolution.glsl:
+                     // "vec2 hue_hue = unpack2(g2.a); float g_detection_hue = hue_hue.y;"
+                     // g2 is tex_genome_ext. So Emission Hue is g2.a.x ?
+                     // "vec2 hue_hue = unpack2(g2.a);" -> x=Emission, y=Detection.
+                     
+                     vec4 g2 = texelFetch(tex_genome_ext, c00, 0);
+                     float dst_hue_packed = g2.a;
+                     // Unpack low 16 bits
+                     uint bits = floatBitsToUint(dst_hue_packed) & ~0x40000000u;
+                     float dst_emit = float((bits >> 15u) & 0x7FFFu) / 32767.0;
+                     
+                     float diff = abs(g_emission_hue - dst_emit);
+                     if (diff > 0.5) diff = 1.0 - diff;
+                     
+                     if (diff > 0.15) blocked = true; // Hard cutoff for now
+                }
+            }
+            if (!blocked) imageAtomicAdd(img_mass_accum, c00, a00);
+            else { kept_mass += a00; a00 = 0u; }
+        }
+
+        // --- Target 10 ---
+        if (a10 > 0) {
+            bool blocked = false;
+            if (barrier_active) {
+                float dst_mass = texelFetch(tex_state, c10, 0).r;
+                if (dst_mass > 0.05) {
+                     vec4 g2 = texelFetch(tex_genome_ext, c10, 0);
+                     uint bits = floatBitsToUint(g2.a) & ~0x40000000u;
+                     float dst_emit = float((bits >> 15u) & 0x7FFFu) / 32767.0;
+                     float diff = abs(g_emission_hue - dst_emit);
+                     if (diff > 0.5) diff = 1.0 - diff;
+                     if (diff > 0.15) blocked = true;
+                }
+            }
+            if (!blocked) imageAtomicAdd(img_mass_accum, c10, a10);
+            else { kept_mass += a10; a10 = 0u; }
+        }
+
+        // --- Target 01 ---
+        if (a01 > 0) {
+            bool blocked = false;
+            if (barrier_active) {
+                float dst_mass = texelFetch(tex_state, c01, 0).r;
+                if (dst_mass > 0.05) {
+                     vec4 g2 = texelFetch(tex_genome_ext, c01, 0);
+                     uint bits = floatBitsToUint(g2.a) & ~0x40000000u;
+                     float dst_emit = float((bits >> 15u) & 0x7FFFu) / 32767.0;
+                     float diff = abs(g_emission_hue - dst_emit);
+                     if (diff > 0.5) diff = 1.0 - diff;
+                     if (diff > 0.15) blocked = true;
+                }
+            }
+            if (!blocked) imageAtomicAdd(img_mass_accum, c01, a01);
+            else { kept_mass += a01; a01 = 0u; }
+        }
+
+        // --- Target 11 ---
+        if (a11 > 0) {
+            bool blocked = false;
+            if (barrier_active) {
+                float dst_mass = texelFetch(tex_state, c11, 0).r;
+                if (dst_mass > 0.05) {
+                     vec4 g2 = texelFetch(tex_genome_ext, c11, 0);
+                     uint bits = floatBitsToUint(g2.a) & ~0x40000000u;
+                     float dst_emit = float((bits >> 15u) & 0x7FFFu) / 32767.0;
+                     float diff = abs(g_emission_hue - dst_emit);
+                     if (diff > 0.5) diff = 1.0 - diff;
+                     if (diff > 0.15) blocked = true;
+                }
+            }
+            if (!blocked) imageAtomicAdd(img_mass_accum, c11, a11);
+            else { kept_mass += a11; a11 = 0u; }
+        }
         
-        // Score based on ACTUAL sent mass amount (a00 etc)
-        // Using 'total_amount' as denominator to normalize would suffice, but raw amount is fine.
-        // We multiply by constant to map to 0-255 roughly (max mass for 1 pixel is ~1-5?)
-        // Actually, just checking > 0 is enough to verify existence.
-        // But for competition, we want Larger Mass > Smaller Mass.
-        // a00 is typically 1e7 or 1e8 range.
-        // We can just use high bits or log score.
-        // Simple linear map: if a00 is 100% of mass, score is 255.
-        // But 'total_amount' varies.
-        // Let's stick to the previous robust logic:
+        // Return kept mass to self (bounce back)
+        if (kept_mass > 0) {
+            imageAtomicAdd(img_mass_accum, uv_i, kept_mass);
+        }
         
-        #define CALC_SCORE_SAFE(amt, tot) ( (amt > 0) ? max(1u, uint( (float(amt)/max(float(tot),1.0)) * 255.0 )) : 0u )
+        // WINNER TRACKING (Logic preserved, simplified for view)
+        // ... (Keep existing if needed, or rely on normalize to handle winner)
         
         // Revised Score: Just use the raw amount scaled? No, we need 0-255? 
         // Actually img_winner_tracker seems to support High Bits for score?
@@ -352,6 +483,10 @@ void main() {
         // 1. Get Source Potential (Growth Affinity)
         float source_pot = texture(tex_potential, uv).r; 
         
+        // WINNER TRACKING
+        uint src_idx = uint(uv_i.y) * uint(p.u_res.x) + uint(uv_i.x);
+        src_idx = src_idx & 0xFFFFFFu; 
+
         // 2. Pre-calc random seed base for this pixel/frame
         // We use the pixel index and the global seed to get a unique hash base
         vec2 noise_base_uv = uv + vec2(p.u_seed, p.u_seed * 0.1);

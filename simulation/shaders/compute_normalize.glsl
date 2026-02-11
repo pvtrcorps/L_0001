@@ -123,8 +123,7 @@ void main() {
         finalGenome1 = texture(tex_old_genome, winner_uv);
         finalGenome2 = texture(tex_genome_ext, winner_uv);
         
-        finalGenome1 = texture(tex_old_genome, winner_uv);
-        finalGenome2 = texture(tex_genome_ext, winner_uv);
+
         
         // ZOMBIE CHECK:
         // 1. Raw Null Check (Uninitialized Memory / Void)

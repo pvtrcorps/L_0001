@@ -284,27 +284,20 @@ void main() {
                 float genetic_dist = abs(my_emission_hue - neighborHue);
                 if (genetic_dist > 0.5) genetic_dist = 1.0 - genetic_dist;
                 
-                // Always accumulate ALL mass for density
+                // Always accumulate ALL mass for density (sumAll) AND growth (sumKin).
+                // This is Strict Flow Lenia: Universal Perception.
+                // The "Species" identity is defined by my local parameters (P), not by who I eat.
+                
                 sumAll += neighborMass * w;
                 weightAll += w;
                 
-                if (genetic_dist < 0.1) {
-                    // SAME SPECIES: Full contribution to kin potential
-                    sumKin += neighborMass * w;
-                    weightKin += w;
-                    // No interaction with self (neutral)
-                } else {
-                    // DIFFERENT SPECIES: Calculate asymmetric interaction
-                    // strength = how much I'm attracted (+) or repelled (-) by them
+                sumKin += neighborMass * w;
+                weightKin += w;
+                
+                // Optional: Helper field for specific interaction forces (non-canonical but useful)
+                // If neighbors are different, calculate their specific attraction/repulsion rating
+                if (genetic_dist >= 0.1) {
                     float strength = get_interaction_strength(g_detection_hue, neighborHue);
-                    
-                    // Modulate kin potential (backward compatible)
-                    float affinity = 1.0 + p.u_interaction_beta * strength;
-                    sumKin += neighborMass * w * max(affinity, 0.0);
-                    weightKin += w;
-                    
-                    // Accumulate interaction potential (NEW!)
-                    // This captures the raw attraction/repulsion field
                     sumInteract += neighborMass * w * strength;
                     weightInteract += w;
                 }

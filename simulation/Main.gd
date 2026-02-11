@@ -22,9 +22,9 @@ var ui_schema = {
 		["R", "Kernel Base Radius (R)", 8.0, 16.0, 1.0]
 	],
 	"Flow Physics": [
-		["temperature", "Temperature (s)", 0.0, 3.0, 0.05],
-		["theta_A", "Global Density Mult", 0.1, 10.0, 0.1],
-		["alpha_n", "Repulsion Sharpness (n)", 0.0, 1.0, 0.1],
+		["temperature", "Temperature (s)", 0.0, 3.0, 0.05], # Advection diffusion (s). Paper default: 0.65
+		["theta_A", "Global Density Mult", 0.1, 10.0, 0.1], # Global Density Multiplier. Canonical 1.0
+		["alpha_n", "Repulsion Sharpness (n)", 0.0, 4.0, 0.1], # Repulsion Sharpness. Canonical 2.0
 		["beta_selection", "Selection Pressure (β)", 0.0, 3.0, 0.1],
 		["interaction_beta", "Kernel Interaction (β)", 0.0, 10.0, 0.1],
 		["genetic_barrier", "Genetic Barrier (Inmiscibility)", 0.0, 1.0, 0.05],

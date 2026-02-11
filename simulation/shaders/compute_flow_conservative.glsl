@@ -290,219 +290,200 @@ void main() {
 
     // Density tolerance threshold
     float local_theta = p.u_theta_A * (0.5 + g_density_tol * 2.0);
-    float alpha = pow(max(myMass, 0.0) / max(local_theta, 0.001), p.u_alpha_n);
+    float alpha_raw = pow(max(myMass, 0.0) / max(local_theta, 0.001), p.u_alpha_n);
     
-    // === FINAL FORCE CALCULATION ===
-    // 1. totalAttraction: Pull toward kin, signals, AND attractive species
-    // 2. alpha * gradLocalDensity: Push away from local crowding
+    // SAFETY 1: Clamp Alpha strictly to [0,1] as per Flow Lenia paper (Eq. 2)
+    // This ensures smooth interpolation between Attraction (Empty) and Diffusion (Crowded)
+    float alpha = clamp(alpha_raw, 0.0, 1.0);
+    
+    // === FINAL FORCE CALCULATION (TARGET VELOCITY) ===
+    // Flow Lenia Equation: F = (1 - alpha) * grad(U) - alpha * grad(A)
+    // - totalAttraction = grad(U) (Affinity/Growth Potential)
+    // - gradLocalDensity = grad(A) (Density Repulsion/Diffusion)
+    // This formulation prevents "fighting" forces: when crowded (alpha->1), attraction turns OFF completely.
+    
+    vec2 flow_field = (1.0 - alpha) * totalAttraction - alpha * gradLocalDensity;
+    
     float force_mult = p.u_flow_speed * (0.2 + g_mobility * 1.8);
-    vec2 force = force_mult * (totalAttraction - alpha * gradLocalDensity);
+    vec2 target_vel = force_mult * flow_field;
     
-    // === INERTIAL INTEGRATION ===
+    // SAFETY 2: Clamp Target Velocity (CFL Condition)
+    // Prevent moving more than ~1.0 pixel per frame effectively
+    float tv_len = length(target_vel);
+    float max_v = 2.0; // Max pixels/sec roughly, let's say 2.0 relative speed
+    if (tv_len > max_v) target_vel = (target_vel / tv_len) * max_v;
+    
+    // === ARISTOTELIAN INTEGRATION ===
+    // In Low Reynolds numbers, Force ~ Velocity (not Acceleration).
+    // We blend from current velocity to target velocity based on 'Fluid Momentum' (Inertia).
+    // fluid_momentum 0.0 = Instant Change (Aristotelian/Massless)
+    // fluid_momentum 1.0 = High Inertia (Newtonian-ishish)
+    
     vec2 old_vel = state.gb;
     
-    // FLUID MOMENTUM CONTROL
-    // If u_fluid_momentum < 1.0, we dampen the old velocity.
-    // If 0.0, it becomes Aristotelian (velocity = force * dt), no inertia.
-    old_vel *= p.u_fluid_momentum;
+    // Smooth transition factor
+    // If momentum is 0, factor is high (fast response).
+    // We multiply by dt to ensure frame-rate independence.
+    float responsiveness = (1.0 - p.u_fluid_momentum) * 10.0;
+    vec2 vel = mix(old_vel, target_vel, clamp(responsiveness * p.u_dt, 0.05, 1.0));
     
-    float responsiveness = mix(1.0, 0.05, g_inertia);
-    vec2 integrated_vel = mix(old_vel, old_vel + force * p.u_dt, responsiveness);
-    integrated_vel *= clamp(1.0 - g_viscosity * p.u_dt * 2.0, 0.0, 1.0);
-    
-    vec2 vel = integrated_vel;
+    // Friction / Viscosity
+    vel *= clamp(1.0 - g_viscosity * p.u_dt * 2.0, 0.0, 1.0);
     
     
-    // === 3. Mass Advection (Scatter with Genetic Barrier) ===
-    vec2 pos_next = uv * p.u_res + vel * p.u_dt;
+    // === 3. Mass Advection (Smooth Splatting) ===
+    // Flow Lenia Reference: 
+    // Target pos = pos + dt * vel
+    // Distribute to neighbors within range [pos - 0.5 - sigma, pos + 0.5 + sigma]
+    // Weight = max(0, 0.5 - |dist| + sigma)
+    // Here we implement a 3x3 kernel which covers sigma up to ~0.5-0.8 efficiently.
+    
+    // IMPORTANT: uv * p.u_res is centered on 0.5 (e.g., 0.5, 1.5, etc.)
+    // But our splatting logic uses integer offsets (dx, dy).
+    // We shift by -0.5 so that 0.5 becomes 0.0, aligning the center of mass with integer index 0.
+    vec2 pos_next = uv * p.u_res + vel * p.u_dt - 0.5;
+    
+    // Handle Boundary Checks (Wrap)
+    // GLSL mod can return negative for negative inputs, so we do standard positive mod
     pos_next = mod(pos_next, p.u_res);
+    if (pos_next.x < 0.0) pos_next.x += p.u_res.x;
+    if (pos_next.y < 0.0) pos_next.y += p.u_res.y;
     
-    vec2 start_cell_f = floor(pos_next - 0.5);
-    ivec2 start_cell = ivec2(start_cell_f);
-    vec2 f = pos_next - 0.5 - start_cell_f;
+    // Nearest integer coordinate (base index of distribution)
+    vec2 center_f = floor(pos_next + 0.5);
+    ivec2 center_i = ivec2(center_f);
     
-    float w00 = (1.0 - f.x) * (1.0 - f.y);
-    float w10 = f.x * (1.0 - f.y);
-    float w01 = (1.0 - f.x) * f.y;
-    float w11 = f.x * f.y;
+    // Relative position from center [-0.5, 0.5]
+    vec2 delta = pos_next - center_f;
     
-    ivec2 c00 = (start_cell + ivec2(0, 0) + ivec2(p.u_res)) % ivec2(p.u_res);
-    ivec2 c10 = (start_cell + ivec2(1, 0) + ivec2(p.u_res)) % ivec2(p.u_res);
-    ivec2 c01 = (start_cell + ivec2(0, 1) + ivec2(p.u_res)) % ivec2(p.u_res);
-    ivec2 c11 = (start_cell + ivec2(1, 1) + ivec2(p.u_res)) % ivec2(p.u_res);
+    // Sigma (Spread) from Temperature parameter
+    // Reference default is 0.65.
+    float sigma = max(p.u_temperature, 0.1); 
+    
+    // Pre-calculate normalization factor
+    // The sum of weights for a Gaussian-like splat isn't strictly 1.0 automatically,
+    // but the reference implementation divides by total area.
+    // Lenia Reference: area = prod(clip(0.5 - |dx| + sigma, 0, 1)) / (4 * sigma^2) ??
+    // Let's stick to the weight formula: w = calc_weight(dx) * calc_weight(dy)
+    // And normalize explicitly to conserve mass.
+    
+    float total_weight = 0.0;
+    float weights[9];
+    ivec2 offsets[9];
+    
+    int idx = 0;
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            // Distance from exact float position `pos_next` to neighbor center `center_f + vec2(dx, dy)`
+            // pos_next = center_f + delta
+            // neighbor = center_f + vec2(dx, dy)
+            // dist = |delta - vec2(dx, dy)|
+            
+            vec2 dist_vec = abs(delta - vec2(float(dx), float(dy)));
+            
+            // Reference Weight Function: sz = 0.5 - dist + sigma
+            vec2 sz = 0.5 - dist_vec + sigma;
+            
+            // Per-axis weight = clip(sz, 0, min(1, 2*sigma))
+            // We use simple max(0, ...) as per standard splatting approximation
+            vec2 w_axis = clamp(sz, 0.0, 1.0);
+            
+            float w = w_axis.x * w_axis.y;
+            
+            weights[idx] = w;
+            offsets[idx] = ivec2(dx, dy);
+            total_weight += w;
+            idx++;
+        }
+    }
+    
+    // Normalize weights to ensure Conservation of Mass
+    if (total_weight < 0.0001) total_weight = 1.0; // Prevent div/0
+    float norm_factor = 1.0 / total_weight;
+    
     
     // Mass Accumulation (High Precision)
     uint total_amount = uint(myMass * MASS_SCALE);
     uint kept_mass = 0u; // Mass blocked by barrier
     
     if (total_amount > 0) {
-        // SAFE PARTITIONING Logic...
+        
         uint remaining = total_amount;
         
-        uint a00 = uint(float(total_amount) * w00);
-        if (a00 > remaining) a00 = remaining;
-        remaining -= a00;
-        
-        uint a10 = uint(float(total_amount) * w10);
-        if (a10 > remaining) a10 = remaining;
-        remaining -= a10;
-        
-        uint a01 = uint(float(total_amount) * w01);
-        if (a01 > remaining) a01 = remaining;
-        remaining -= a01;
-        
-        uint a11 = remaining; 
-
-        // BARRIER FUNCTION
-        // Checks if mass can flow to target. If not, adds to kept_mass.
-        // We only check barrier if feature is enabled (u_genetic_barrier > 0)
-        
-        float barrier = p.u_genetic_barrier;
-        bool barrier_active = barrier > 0.01;
-        
-        // --- Target 00 ---
-        if (a00 > 0) {
+        // Distribute to 9 neighbors
+        for (int i = 0; i < 9; i++) {
+            float w = weights[i] * norm_factor;
+            if (w < 0.001) continue; // Skip negligible contributions
+            
+            uint amount = uint(float(total_amount) * w);
+            // Cap at remaining to avoid creating mass
+            if (amount > remaining) amount = remaining;
+            if (i == 8) amount = remaining; // Dump rest in last valid/non-zero neighbor? 
+            // Better: just subtract. The last one takes the rest is risky if last one has 0 weight.
+            // Let's just consume.
+            remaining -= amount;
+            
+            if (amount == 0u) continue;
+            
+            // Target Coord
+            ivec2 target_uv = (center_i + offsets[i] + ivec2(p.u_res)) % ivec2(p.u_res);
+            
+             // BARRIER FUNCTION
             bool blocked = false;
-            if (barrier_active) {
-                float dst_mass = texelFetch(tex_state, c00, 0).r;
-                if (dst_mass > 0.05) { // Only check if significant mass exists
-                     float dst_hue = texelFetch(tex_genome, c00, 0).a; // Hue is in Alpha of tex_genome (Gene 4 or 8?)
-                     // Actually Hue is Gene 15 (Emission Hue). 
-                     // tex_genome has Genes 1-4 (RGBA). tex_genome_ext has 9-12 (RGBA) and 13-16 (RGBA in B channel?)
-                     // WAIT: We need to know where Emission Hue is.
-                     // Params: g_emission_hue is Gene 15.
-                     // In compute_convolution, we unpack it from channel A of tex_genome_ext?
-                     // Let's verify packing. Assumed Gene 15 is in tex_genome_ext.
-                     // But here we might not have easy access if packing is complex.
-                     // SIMPLIFICATION: We use tex_genome.a as a proxy for identity if not sure, 
-                     // OR we just use the raw value stored in channel used for color.
-                     // Let's assume Gene 4 (Viscosity) or something else?
-                     // Actually, let's look at compute_convolution.glsl:
-                     // "vec2 hue_hue = unpack2(g2.a); float g_detection_hue = hue_hue.y;"
-                     // g2 is tex_genome_ext. So Emission Hue is g2.a.x ?
-                     // "vec2 hue_hue = unpack2(g2.a);" -> x=Emission, y=Detection.
-                     
-                     vec4 g2 = texelFetch(tex_genome_ext, c00, 0);
-                     float dst_hue_packed = g2.a;
-                     // Unpack low 16 bits
-                     uint bits = floatBitsToUint(dst_hue_packed) & ~0x40000000u;
-                     float dst_emit = float((bits >> 15u) & 0x7FFFu) / 32767.0;
-                     
-                     float diff = abs(g_emission_hue - dst_emit);
-                     if (diff > 0.5) diff = 1.0 - diff;
-                     
-                     if (diff > 0.15) blocked = true; // Hard cutoff for now
-                }
-            }
-            if (!blocked) imageAtomicAdd(img_mass_accum, c00, a00);
-            else { kept_mass += a00; a00 = 0u; }
-        }
-
-        // --- Target 10 ---
-        if (a10 > 0) {
-            bool blocked = false;
-            if (barrier_active) {
-                float dst_mass = texelFetch(tex_state, c10, 0).r;
+            float barrier = p.u_genetic_barrier;
+            
+            if (barrier > 0.01) {
+                float dst_mass = texelFetch(tex_state, target_uv, 0).r;
                 if (dst_mass > 0.05) {
-                     vec4 g2 = texelFetch(tex_genome_ext, c10, 0);
+                     vec4 g2 = texelFetch(tex_genome_ext, target_uv, 0);
                      uint bits = floatBitsToUint(g2.a) & ~0x40000000u;
                      float dst_emit = float((bits >> 15u) & 0x7FFFu) / 32767.0;
+                     
                      float diff = abs(g_emission_hue - dst_emit);
                      if (diff > 0.5) diff = 1.0 - diff;
                      if (diff > 0.15) blocked = true;
                 }
             }
-            if (!blocked) imageAtomicAdd(img_mass_accum, c10, a10);
-            else { kept_mass += a10; a10 = 0u; }
-        }
-
-        // --- Target 01 ---
-        if (a01 > 0) {
-            bool blocked = false;
-            if (barrier_active) {
-                float dst_mass = texelFetch(tex_state, c01, 0).r;
-                if (dst_mass > 0.05) {
-                     vec4 g2 = texelFetch(tex_genome_ext, c01, 0);
-                     uint bits = floatBitsToUint(g2.a) & ~0x40000000u;
-                     float dst_emit = float((bits >> 15u) & 0x7FFFu) / 32767.0;
-                     float diff = abs(g_emission_hue - dst_emit);
-                     if (diff > 0.5) diff = 1.0 - diff;
-                     if (diff > 0.15) blocked = true;
+            
+            if (!blocked) {
+                imageAtomicAdd(img_mass_accum, target_uv, amount);
+                
+                // WINNER TRACKING (Gumbel-Max)
+                // Use the standardized score calculation
+                // Re-calculate noise for each target to be unique? 
+                // Actually the "noise" is associated with the *source* claiming the target.
+                // We use uv (source ID) + target_uv (context)??
+                // Reference uses: log(mass) + Gumbel.
+                // We just need a consistent tie-breaker.
+                
+                // Reuse the macro logic but inline for 9-loop
+                // We need to pass the target coordinate to get a unique hash if we want?
+                // Actually, standard Gumbel-Max: Score is characteristic of the CHOICE (Source).
+                // So Score = log(my_mass_sent) + Noise.
+                // We can compute noise once per source? No, Gumbel trick establishes max.
+                // We compute score for THIS source claiming THIS target.
+                
+                float source_pot = texture(tex_potential, uv).r; 
+                uint src_idx = uint(uv_i.y) * uint(p.u_res.x) + uint(uv_i.x);
+                src_idx = src_idx & 0xFFFFFFu; 
+                
+                // Unique noise per target-source pair to avoid coherent artifacts
+                vec2 noise_uv = uv + vec2(float(i)*0.1, p.u_seed); 
+                uint score = calculate_gumbel_score(amount, source_pot, p.u_beta, noise_uv);
+                
+                if (score > 0u) {
+                    imageAtomicMax(img_winner_tracker, target_uv, (score << 24u) | src_idx);
                 }
+                
+            } else {
+                kept_mass += amount;
             }
-            if (!blocked) imageAtomicAdd(img_mass_accum, c01, a01);
-            else { kept_mass += a01; a01 = 0u; }
-        }
-
-        // --- Target 11 ---
-        if (a11 > 0) {
-            bool blocked = false;
-            if (barrier_active) {
-                float dst_mass = texelFetch(tex_state, c11, 0).r;
-                if (dst_mass > 0.05) {
-                     vec4 g2 = texelFetch(tex_genome_ext, c11, 0);
-                     uint bits = floatBitsToUint(g2.a) & ~0x40000000u;
-                     float dst_emit = float((bits >> 15u) & 0x7FFFu) / 32767.0;
-                     float diff = abs(g_emission_hue - dst_emit);
-                     if (diff > 0.5) diff = 1.0 - diff;
-                     if (diff > 0.15) blocked = true;
-                }
-            }
-            if (!blocked) imageAtomicAdd(img_mass_accum, c11, a11);
-            else { kept_mass += a11; a11 = 0u; }
         }
         
         // Return kept mass to self (bounce back)
-        if (kept_mass > 0) {
+        if (kept_mass > 0u) {
             imageAtomicAdd(img_mass_accum, uv_i, kept_mass);
         }
-        
-        // WINNER TRACKING (Logic preserved, simplified for view)
-        // ... (Keep existing if needed, or rely on normalize to handle winner)
-        
-        // Revised Score: Just use the raw amount scaled? No, we need 0-255? 
-        // Actually img_winner_tracker seems to support High Bits for score?
-        // compute_normalize reads: uint packed = imageLoad...
-        // Format R32UI.
-        // Packed = (Score << 24) | Index.
-        // Score is 8 bits (255).
-        
-        // Proper normalized score: fraction of MY mass sent.
-        // NO! We want Absolute Mass comparison.
-        // A giant blob contributing 10% should beat a tiny speck contributing 100%.
-        // Score = min(255, amount / (SCALE/255) )
-        // MASS_SCALE = 1e8.
-        // If amount = 1e6 (0.01 mass), Score = 1?
-        // Let's scale so 1.0 mass = 255 score.
-        // score = amount / (1e8 / 255) = amount * 2.55e-6
-        
-        // NEGOTIATION RULE (Gumbel-Max)
-        // Score = log(Mass) + Beta * Potential + GumbelNoise
-        // Mass is 'amount' (uint). Potential is 'source_pot' [-1, 1].
-        
-        // 1. Get Source Potential (Growth Affinity)
-        float source_pot = texture(tex_potential, uv).r; 
-        
-        // WINNER TRACKING
-        uint src_idx = uint(uv_i.y) * uint(p.u_res.x) + uint(uv_i.x);
-        src_idx = src_idx & 0xFFFFFFu; 
-
-        // 2. Pre-calc random seed base for this pixel/frame
-        // We use the pixel index and the global seed to get a unique hash base
-        vec2 noise_base_uv = uv + vec2(p.u_seed, p.u_seed * 0.1);
-
-        #define CALC_SCORE_GUMBEL(amt, offset_idx) \
-            ( (amt > 0) ? calculate_gumbel_score(amt, source_pot, p.u_beta, noise_base_uv + vec2(float(offset_idx)*0.01)) : 0u )
-            
-        uint s00 = CALC_SCORE_GUMBEL(a00, 0);
-        uint s10 = CALC_SCORE_GUMBEL(a10, 1);
-        uint s01 = CALC_SCORE_GUMBEL(a01, 2);
-        uint s11 = CALC_SCORE_GUMBEL(a11, 3);
-
-        if (s00 > 0) imageAtomicMax(img_winner_tracker, c00, (s00 << 24u) | src_idx);
-        if (s10 > 0) imageAtomicMax(img_winner_tracker, c10, (s10 << 24u) | src_idx);
-        if (s01 > 0) imageAtomicMax(img_winner_tracker, c01, (s01 << 24u) | src_idx);
-        if (s11 > 0) imageAtomicMax(img_winner_tracker, c11, (s11 << 24u) | src_idx);
     }
     
     // Store calculated velocity (source, instantaneous) into the G/B channels of the destination state

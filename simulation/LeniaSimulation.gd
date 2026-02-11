@@ -26,14 +26,14 @@ var params = {
 	# Advanced Physics (Flow Lenia style)
 	"temperature": 0.65,   # Advection diffusion (s). Paper default: 0.65 (Currently Standard Bilinear)
 	"theta_A": 1.0,        # Global Density Multiplier. Canonical ~1.0? (Was 5.0)
-	"alpha_n": 0.0,        # Repulsion Sharpness. Canonical: 2.0. (Was 0.0)
+	"alpha_n": 3.0,        # Repulsion Sharpness. [NEW: 3.0 for Solid Bodies]. (Was 0.0)
 	
 	# Signal Layer
 	"signal_diff": 0.0,    # Diffusion Rate
 	"signal_decay": 0.001,   # Decay Rate
 	"signal_advect": 1.0,  # Signal advection weight [0-1] (how much signals follow mass flow)
-	"flow_speed": 5.0,     # Multiplier for advection force (decopuled from dt)
-	"fluid_momentum": 0.5, # Momentum/Inertia (0.0 = Aristotelian, 1.0 = Newtonian)
+	"flow_speed": 2.0,     # [NEW: 2.0 for Aristotelian Stability]. Multiplier for advection force
+	"fluid_momentum": 0.2, # [NEW: 0.2 Low Inertia]. Momentum/Inertia (0.0 = Aristotelian, 1.0 = Newtonian)
 	
 	"beta_selection": 1.0, # Selection pressure for negotiation rule
 	

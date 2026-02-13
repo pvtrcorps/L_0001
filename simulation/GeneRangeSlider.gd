@@ -43,7 +43,7 @@ func setup(initial_min: float, initial_max: float, limit_min: float, limit_max: 
 func _draw() -> void:
 	var center_y := size.y * 0.5
 	var left := handle_radius
-	var right := max(left + 1.0, size.x - handle_radius)
+	var right: float = max(left + 1.0, size.x - handle_radius)
 
 	# Base track
 	draw_line(Vector2(left, center_y), Vector2(right, center_y), Color(0.25, 0.25, 0.25), 4.0)
@@ -59,21 +59,23 @@ func _draw() -> void:
 
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
-		if event.pressed:
-			var mouse_x := event.position.x
+		var mouse_event := event as InputEventMouseButton
+		if mouse_event.pressed:
+			var mouse_x := mouse_event.position.x
 			var min_x := _value_to_x(min_value)
 			var max_x := _value_to_x(max_value)
 			if abs(mouse_x - min_x) <= abs(mouse_x - max_x):
 				_dragging_min = true
 			else:
 				_dragging_max = true
-			_update_drag(event.position.x)
+			_update_drag(mouse_event.position.x)
 		else:
 			_dragging_min = false
 			_dragging_max = false
 	elif event is InputEventMouseMotion:
 		if _dragging_min or _dragging_max:
-			_update_drag(event.position.x)
+			var mouse_event := event as InputEventMouseMotion
+			_update_drag(mouse_event.position.x)
 
 func _update_drag(mouse_x: float) -> void:
 	var value := _x_to_value(mouse_x)
@@ -92,11 +94,11 @@ func _value_to_x(value: float) -> float:
 	if is_equal_approx(max_limit, min_limit):
 		return handle_radius
 	var t := (value - min_limit) / (max_limit - min_limit)
-	return lerp(handle_radius, max(size.x - handle_radius, handle_radius + 1.0), t)
+	return lerp(handle_radius, max(size.x - handle_radius, handle_radius + 1.0), t) as float
 
 func _x_to_value(x: float) -> float:
 	var left := handle_radius
-	var right := max(left + 1.0, size.x - handle_radius)
+	var right: float = max(left + 1.0, size.x - handle_radius)
 	var t := inverse_lerp(left, right, clamp(x, left, right))
 	return lerp(min_limit, max_limit, t)
 

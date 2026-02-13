@@ -146,11 +146,9 @@ void main() {
              finalGenome2 = vec4(0.0);
         }
     } else {
-        // No genome provider claimed this pixel (and tracking is robust now).
-        // If we end up here, it's true orphan dust. Kill it.
-        mass = 0.0;
-        finalGenome1 = vec4(0.0);
-        finalGenome2 = vec4(0.0);
+        // If no winner was registered but mass exists (e.g. blocked bounce-back / quantization),
+        // keep local identity instead of deleting mass.
+        // This avoids artificial mass loss from bookkeeping races.
     }
     
     // Write BOTH genomes to new generation (Move identity)

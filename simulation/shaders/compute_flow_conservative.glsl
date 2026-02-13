@@ -141,7 +141,7 @@ void main() {
     vec4 state = texture(tex_state, uv);
     float myMass = state.r;
     
-    if (myMass < 0.0001) {
+    if (myMass <= 0.0) {
         imageStore(img_new_state, uv_i, vec4(0.0));
         return; 
     }
@@ -403,24 +403,29 @@ void main() {
     
     
     // Mass Accumulation (High Precision)
-    uint total_amount = uint(myMass * MASS_SCALE);
+    uint total_amount = uint(round(myMass * MASS_SCALE));
     uint kept_mass = 0u; // Mass blocked by barrier
     
     if (total_amount > 0) {
         
         uint remaining = total_amount;
+        int last_valid_idx = -1;
+        for (int i = 0; i < 9; i++) {
+            float w = weights[i] * norm_factor;
+            if (w >= 0.001) {
+                last_valid_idx = i;
+            }
+        }
         
         // Distribute to 9 neighbors
         for (int i = 0; i < 9; i++) {
             float w = weights[i] * norm_factor;
             if (w < 0.001) continue; // Skip negligible contributions
             
-            uint amount = uint(float(total_amount) * w);
+            uint amount = uint(round(float(total_amount) * w));
             // Cap at remaining to avoid creating mass
             if (amount > remaining) amount = remaining;
-            if (i == 8) amount = remaining; // Dump rest in last valid/non-zero neighbor? 
-            // Better: just subtract. The last one takes the rest is risky if last one has 0 weight.
-            // Let's just consume.
+            if (i == last_valid_idx) amount = remaining;
             remaining -= amount;
             
             if (amount == 0u) continue;
@@ -478,6 +483,12 @@ void main() {
             } else {
                 kept_mass += amount;
             }
+        }
+
+        // Any residual quantization error remains in place to preserve strict conservation.
+        if (remaining > 0u) {
+            imageAtomicAdd(img_mass_accum, uv_i, remaining);
+            kept_mass += remaining;
         }
         
         // Return kept mass to self (bounce back)

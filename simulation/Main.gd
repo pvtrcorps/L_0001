@@ -3,6 +3,7 @@ extends Node
 @onready var sim = $LeniaSimulation
 @onready var ui_container = $CanvasLayer/UI/Panel/Scroll/VBox
 const GeneHistogram = preload("res://simulation/GeneHistogram.gd")
+const GeneRangeSlider = preload("res://simulation/GeneRangeSlider.gd")
 var histogram_display
 var species_container
 var tooltip_panel
@@ -44,24 +45,22 @@ var ui_schema = {
 		["wind_speed", "Wind Speed", 0.0, 2.0, 0.05]
 	],
 	"Gene Pools (Init)": [
-		["g_mu_min", "Archetype (Mu) Min", 0.0, 1.0, 0.05],
-		["g_mu_max", "Archetype (Mu) Max", 0.0, 1.0, 0.05],
-		["g_sigma_min", "Stability (Sigma) Min", 0.0, 1.0, 0.05],
-		["g_sigma_max", "Stability (Sigma) Max", 0.0, 1.0, 0.05],
-		["g_radius_min", "Effect Radius Min", 0.0, 1.0, 0.05],
-		["g_radius_max", "Effect Radius Max", 0.0, 1.0, 0.05],
-		["g_viscosity_min", "Viscosity Min", 0.0, 1.0, 0.05],
-		["g_viscosity_max", "Viscosity Max", 0.0, 1.0, 0.05],
-		["g_mobility_min", "Mobility Min", 0.0, 1.0, 0.05],
-		["g_mobility_max", "Mobility Max", 0.0, 1.0, 0.05],
-		["g_affinity_min", "Cohesion (Affinity) Min", 0.0, 1.0, 0.05],
-		["g_affinity_max", "Cohesion (Affinity) Max", 0.0, 1.0, 0.05],
-		["g_density_tol_min", "Density Tolerance Min", 0.0, 1.0, 0.05],
-		["g_density_tol_max", "Density Tolerance Max", 0.0, 1.0, 0.05],
-		["g_secretion_min", "Secretion Min", 0.0, 1.0, 0.05],
-		["g_secretion_max", "Secretion Max", 0.0, 1.0, 0.05],
-		["g_sensitivity_min", "Sensitivity Min", 0.0, 1.0, 0.05],
-		["g_sensitivity_max", "Sensitivity Max", 0.0, 1.0, 0.05]
+		["g_mu", "Archetype (Mu)", 0.0, 1.0, 0.05],
+		["g_sigma", "Stability (Sigma)", 0.0, 1.0, 0.05],
+		["g_radius", "Effect Radius", 0.0, 1.0, 0.05],
+		["g_viscosity", "Viscosity", 0.0, 1.0, 0.05],
+		["g_shape_a", "Shape A (Ring Balance)", 0.0, 1.0, 0.05],
+		["g_shape_b", "Shape B (Complexity)", 0.0, 1.0, 0.05],
+		["g_shape_c", "Shape C (Ring Spacing)", 0.0, 1.0, 0.05],
+		["g_inertia", "Inertia", 0.0, 1.0, 0.05],
+		["g_affinity", "Cohesion (Affinity)", 0.0, 1.0, 0.05],
+		["g_repulsion", "Repulsion", 0.0, 1.0, 0.05],
+		["g_density_tol", "Density Tolerance", 0.0, 1.0, 0.05],
+		["g_mobility", "Mobility", 0.0, 1.0, 0.05],
+		["g_secretion", "Secretion", 0.0, 1.0, 0.05],
+		["g_sensitivity", "Sensitivity", 0.0, 1.0, 0.05],
+		["g_emission_hue", "Emission Hue", 0.0, 1.0, 0.05],
+		["g_detection_hue", "Detection Hue", 0.0, 1.0, 0.05]
 	]
 }
 
@@ -134,23 +133,23 @@ func _build_ui():
 		"signal_emission_strength": "Signal Emission (Volume). Global Multiplier for how much signal creatures produce.",
 		"beta_selection": "Selection Pressure (β). Controls genome competition strength. 0.0=mass only, 1.0=balanced, 2.0=highly competitive.",
 		
-		# Genes
-		"g_mu_min": "Archetype (Mu) Minimum. Optimal density for growth.",
-		"g_mu_max": "Archetype (Mu) Maximum.",
-		"g_sigma_min": "Stability (Sigma) Minimum. Tolerance range around the optimal density.",
-		"g_sigma_max": "Stability (Sigma) Maximum.",
-		"g_radius_min": "Effect Radius Minimum. Relative size of the creature's influence.",
-		"g_radius_max": "Effect Radius Maximum.",
-		"g_mobility_min": "Mobility (Flow) Minimum. How fast the creature can move/flow.",
-		"g_mobility_max": "Mobility (Flow) Maximum.",
-		"g_affinity_min": "Cohesion (Affinity) Minimum. Attraction strength to own species.",
-		"g_affinity_max": "Cohesion (Affinity) Maximum.",
-		"g_density_tol_min": "Density Tolerance (Lambda) Minimum. Width of the growth function.",
-		"g_density_tol_max": "Density Tolerance (Lambda) Maximum.",
-		"g_secretion_min": "Secretion Minimum. Amount of chemical signal produced.",
-		"g_secretion_max": "Secretion Maximum.",
-		"g_sensitivity_min": "Sensitivity Minimum. Sensitivity to the chemical signal.",
-		"g_sensitivity_max": "Sensitivity Maximum."
+		# Genes (single range slider controls both min/max)
+		"g_mu": "Archetype (Mu). Optimal density for growth.",
+		"g_sigma": "Stability (Sigma). Tolerance range around the optimal density.",
+		"g_radius": "Effect Radius. Relative size of the creature's influence.",
+		"g_viscosity": "Viscosity. Internal drag/friction in movement.",
+		"g_shape_a": "Shape A. Controls ring balance in kernel shape.",
+		"g_shape_b": "Shape B. Controls pattern complexity.",
+		"g_shape_c": "Shape C. Controls ring spacing.",
+		"g_inertia": "Inertia. Resistance to directional changes.",
+		"g_affinity": "Cohesion (Affinity). Attraction strength to own species.",
+		"g_repulsion": "Repulsion. Separation force against overcrowding.",
+		"g_density_tol": "Density Tolerance (Lambda). Width of the growth function.",
+		"g_mobility": "Mobility (Flow). How fast the creature can move/flow.",
+		"g_secretion": "Secretion. Amount of chemical signal produced.",
+		"g_sensitivity": "Sensitivity. Response to the chemical signal.",
+		"g_emission_hue": "Emission Hue. Identity/pitch of emitted signal.",
+		"g_detection_hue": "Detection Hue. Preferred hue/pitch to react to."
 	}
 	
 	# Parameter sliders
@@ -167,6 +166,7 @@ func _build_ui():
 			var min_v = item[2]
 			var max_v = item[3]
 			var step_v = item[4]
+			var is_gene_range = group == "Gene Pools (Init)"
 			
 			var container = VBoxContainer.new()
 			container.add_theme_constant_override("separation", 0)
@@ -181,36 +181,58 @@ func _build_ui():
 			var val_label = Label.new()
 			var initial_val = sim.get_parameter(key)
 			if initial_val == null: initial_val = 0.0 # Fallback for new keys
-			val_label.text = str(initial_val).pad_decimals(3)
 			val_label.name = "Val_" + key
 			val_label.add_theme_font_size_override("font_size", 10)
 			val_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+			if is_gene_range:
+				var initial_min = sim.get_parameter(key + "_min")
+				var initial_max = sim.get_parameter(key + "_max")
+				if initial_min == null: initial_min = min_v
+				if initial_max == null: initial_max = max_v
+				val_label.text = "%s - %s" % [str(initial_min).pad_decimals(3), str(initial_max).pad_decimals(3)]
+			else:
+				val_label.text = str(initial_val).pad_decimals(3)
 			
 			lbl_hbox.add_child(label)
 			lbl_hbox.add_child(val_label)
 			
-			var slider = HSlider.new()
-			slider.min_value = min_v
-			slider.max_value = max_v
-			slider.step = step_v
-			slider.value = initial_val
-			slider.size_flags_vertical = Control.SIZE_EXPAND_FILL
+			var slider_control: Control
+			if is_gene_range:
+				var range_slider = GeneRangeSlider.new()
+				var range_min = sim.get_parameter(key + "_min")
+				var range_max = sim.get_parameter(key + "_max")
+				if range_min == null: range_min = min_v
+				if range_max == null: range_max = max_v
+				range_slider.setup(range_min, range_max, min_v, max_v, step_v)
+				range_slider.range_changed.connect(func(v_min, v_max):
+					sim.set_parameter(key + "_min", v_min)
+					sim.set_parameter(key + "_max", v_max)
+					val_label.text = "%s - %s" % [str(v_min).pad_decimals(3), str(v_max).pad_decimals(3)]
+				)
+				slider_control = range_slider
+			else:
+				var slider = HSlider.new()
+				slider.min_value = min_v
+				slider.max_value = max_v
+				slider.step = step_v
+				slider.value = initial_val
+				slider.value_changed.connect(func(v):
+					sim.set_parameter(key, v)
+					val_label.text = str(v).pad_decimals(3)
+				)
+				slider_control = slider
+
+			slider_control.size_flags_vertical = Control.SIZE_EXPAND_FILL
 			
 			# Apply Tooltips
 			if tooltips.has(key):
 				var tt = tooltips[key]
 				label.tooltip_text = tt
 				val_label.tooltip_text = tt
-				slider.tooltip_text = tt
-			
-			# Connect using the new API
-			slider.value_changed.connect(func(v): 
-				sim.set_parameter(key, v)
-				val_label.text = str(v).pad_decimals(3)
-			)
+				slider_control.tooltip_text = tt
 			
 			container.add_child(lbl_hbox)
-			container.add_child(slider)
+			container.add_child(slider_control)
 			ui_container.add_child(container)
 		
 		ui_container.add_child(HSeparator.new())

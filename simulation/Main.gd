@@ -80,7 +80,6 @@ func _build_ui():
 	stats_header.text = "STATISTICS"
 	stats_header.add_theme_color_override("font_color", Color(1.0, 0.8, 0.2))
 	stats_header.add_theme_font_size_override("font_size", 14)
-	stats_header.add_theme_font_size_override("font_size", 14)
 	ui_container.add_child(stats_header)
 
 	# Floating Tooltip (Child of CanvasLayer)
@@ -288,16 +287,45 @@ func _on_stats_updated(total_mass, population, histograms):
 		stats_labels["Total Mass"].text = "Total Mass: " + str(int(total_mass))
 		
 	if stats_labels.has("Coverage"):
-		# Population count / Total Pixels (1024*1024 = 1048576)
-		var coverage = (float(population) / 1048576.0) * 100.0
+		var total_pixels = max(1.0, sim.params["res_x"] * sim.params["res_y"])
+		var coverage = (float(population) / total_pixels) * 100.0
 		stats_labels["Coverage"].text = "Coverage: " + "%.2f" % coverage + "%"
 		
 	if stats_labels.has("Diversity"):
-		stats_labels["Diversity"].text = "Diversity: (Calc...)"
+		stats_labels["Diversity"].text = "Diversity: " + "%.3f" % _compute_diversity(histograms)
 		
 	# Update Histogram
 	if histogram_display:
 		histogram_display.update_histograms(histograms)
+
+func _compute_diversity(histograms) -> float:
+	# Shannon entropy normalized by number of bins.
+	# 0.0 => all genes concentrated in one bin, 1.0 => maximally spread.
+	var total = 0.0
+	for bins in histograms:
+		for value in bins:
+			total += float(value)
+
+	if total <= 0.0:
+		return 0.0
+
+	var entropy = 0.0
+	var bin_count = 0
+	for bins in histograms:
+		for value in bins:
+			var p = float(value) / total
+			if p > 0.0:
+				entropy -= p * log(p)
+			bin_count += 1
+
+	if bin_count <= 1:
+		return 0.0
+
+	var max_entropy = log(float(bin_count))
+	if max_entropy <= 0.0:
+		return 0.0
+
+	return clamp(entropy / max_entropy, 0.0, 1.0)
 
 
 		

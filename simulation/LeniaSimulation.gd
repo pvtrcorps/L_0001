@@ -3,6 +3,7 @@ extends Node
 signal stats_updated(total_mass, population, histograms)
 signal species_list_updated(species_list)
 signal species_hovered(info) # New signal
+signal gameplay_updated(biomass, deck_state, selected_slot)
 # SpeciesTracker is a global class
 var tracker = SpeciesTracker.new()
 var camera: SimulationCamera
@@ -125,6 +126,19 @@ var ping_pong := false
 var initialized := false
 var paused := false # Pause state
 
+# Strategic layer
+var biomass := 120.0
+var biomass_max := 300.0
+var biomass_income := 7.5
+var selected_deck_slot := 0
+var deck_cards: Array = []
+var deploy_queue: Array = []
+
+# Spawn pass resources
+var shader_spawn: RID
+var pipeline_spawn: RID
+var spawn_buffer: RID
+
 # Uniform Set Cache
 var set_cache = {}
 
@@ -139,6 +153,57 @@ var analysis_pending_frame := -1
 var stats_interval := 10
 var analysis_interval := 30
 var params_time := 0.0
+
+func _create_default_deck() -> Array:
+	return [
+		{
+			"name": "Fast Replicator",
+			"role": "Harvester",
+			"cost": 24.0,
+			"cooldown": 1.5,
+			"spawn_mass": 0.14,
+			"radius": 14.0,
+			"mode": 3.0,
+			"genes": [0.55,0.35,0.38,0.30,0.42,0.35,0.40,0.25,0.58,0.30,0.35,0.78,0.80,0.66,0.31,0.28],
+			"cooldown_remaining": 0.0
+		},
+		{
+			"name": "Heavy Tank",
+			"role": "Tank",
+			"cost": 48.0,
+			"cooldown": 3.5,
+			"spawn_mass": 0.20,
+			"radius": 18.0,
+			"mode": 2.0,
+			"genes": [0.62,0.60,0.68,0.72,0.45,0.38,0.30,0.82,0.44,0.64,0.85,0.22,0.20,0.22,0.09,0.07],
+			"cooldown_remaining": 0.0
+		},
+		{
+			"name": "Poison Spitter",
+			"role": "DPS",
+			"cost": 36.0,
+			"cooldown": 2.2,
+			"spawn_mass": 0.16,
+			"radius": 16.0,
+			"mode": 1.0,
+			"genes": [0.47,0.40,0.42,0.25,0.60,0.70,0.44,0.28,0.32,0.55,0.36,0.68,0.88,0.74,0.80,0.78],
+			"cooldown_remaining": 0.0
+		},
+		{
+			"name": "Scout",
+			"role": "Scout",
+			"cost": 18.0,
+			"cooldown": 1.0,
+			"spawn_mass": 0.10,
+			"radius": 11.0,
+			"mode": 0.0,
+			"genes": [0.40,0.28,0.24,0.18,0.30,0.35,0.42,0.16,0.34,0.32,0.28,0.92,0.28,0.88,0.55,0.57],
+			"cooldown_remaining": 0.0
+		}
+	]
+
+func _emit_gameplay_updated():
+	emit_signal("gameplay_updated", biomass, deck_cards, selected_deck_slot)
 
 
 # Camera state delegated to SimulationCamera
@@ -171,6 +236,8 @@ func _ready():
 	add_child(camera)
 	camera.inspect_requested.connect(_on_camera_inspect)
 	
+	deck_cards = _create_default_deck()
+	_emit_gameplay_updated()
 	print("Parametric Lenia with Signaling initialized.")
 
 func _process(delta):
@@ -181,11 +248,18 @@ func _process(delta):
 	
 	if not paused:
 		params_time += delta
+		biomass = clamp(biomass + biomass_income * delta, 0.0, biomass_max)
+		for i in range(deck_cards.size()):
+			deck_cards[i]["cooldown_remaining"] = max(0.0, float(deck_cards[i].get("cooldown_remaining", 0.0)) - delta)
 		
 	# 1. Update UBO
 	if not paused:
 		_update_ubo()
 		_dispatch_step()
+		while deploy_queue.size() > 0:
+			var req = deploy_queue.pop_front()
+			_dispatch_spawn(req["uv"], req["card"])
+		_emit_gameplay_updated()
 	
 	# 2. Async Stats Readback
 	# Check if we have a pending stats request that is old enough (2 frames latency)
@@ -468,6 +542,10 @@ func _create_uniforms():
 	var analysis_bytes = PackedByteArray()
 	analysis_bytes.resize(294912)
 	analysis_buffer = rd.storage_buffer_create(294912, analysis_bytes)
+	
+	var spawn_bytes = PackedByteArray()
+	spawn_bytes.resize(96)
+	spawn_buffer = rd.storage_buffer_create(96, spawn_bytes)
 
 func _create_sampler():
 	var sampler_state_linear = RDSamplerState.new()
@@ -562,7 +640,8 @@ func _compile_shaders():
 		"analysis": "res://simulation/shaders/compute_analysis.glsl",
 		"flow_con": "res://simulation/shaders/compute_flow_conservative.glsl",
 		"norm": "res://simulation/shaders/compute_normalize.glsl",
-		"signal": "res://simulation/shaders/compute_signal.glsl"
+		"signal": "res://simulation/shaders/compute_signal.glsl",
+		"spawn": "res://simulation/shaders/compute_spawn.glsl"
 	}
 	
 	shader_init = _load_shader(paths["init"])
@@ -574,6 +653,7 @@ func _compile_shaders():
 	shader_flow_conservative = _load_shader(paths["flow_con"])
 	shader_normalize = _load_shader(paths["norm"])
 	shader_signal = _load_shader(paths["signal"])
+	shader_spawn = _load_shader(paths["spawn"])
 	
 	# Validate Shaders before creating pipelines
 	if not shader_init.is_valid(): push_error("Shader Init invalid")
@@ -603,6 +683,8 @@ func _compile_shaders():
 	
 	if not shader_signal.is_valid(): push_error("Shader Signal invalid")
 	else: pipeline_signal = rd.compute_pipeline_create(shader_signal)
+	if not shader_spawn.is_valid(): push_error("Shader Spawn invalid")
+	else: pipeline_spawn = rd.compute_pipeline_create(shader_spawn)
 
 func _load_shader(path: String) -> RID:
 	# Prioritize Direct Source Loading to avoid .import lag
@@ -955,6 +1037,10 @@ func reset_simulation():
 	set_cache.clear()
 	_dispatch_init()
 	params["seed"] = randf() * 1000.0
+	for i in range(deck_cards.size()):
+		deck_cards[i]["cooldown_remaining"] = 0.0
+	biomass = 120.0
+	_emit_gameplay_updated()
 
 func clear_simulation():
 	rd.texture_clear(tex_state_a, Color(0,0,0,0), 0, 1, 0, 1)
@@ -985,6 +1071,7 @@ func change_resolution(w: float, h: float):
 	rd.free_rid(pipeline_flow_conservative)
 	rd.free_rid(pipeline_normalize)
 	rd.free_rid(pipeline_signal)
+	rd.free_rid(pipeline_spawn)
 	
 	_free_resources()
 	
@@ -1001,6 +1088,7 @@ func change_resolution(w: float, h: float):
 	pipeline_flow_conservative = rd.compute_pipeline_create(shader_flow_conservative)
 	pipeline_normalize = rd.compute_pipeline_create(shader_normalize)
 	pipeline_signal = rd.compute_pipeline_create(shader_signal)
+	pipeline_spawn = rd.compute_pipeline_create(shader_spawn)
 	
 	_create_textures()
 	# Uniforms depend on texture RIDs, so recreate them?
@@ -1039,6 +1127,7 @@ func _free_resources():
 	if ubo.is_valid(): rd.free_rid(ubo)
 	if stats_buffer.is_valid(): rd.free_rid(stats_buffer)
 	if analysis_buffer.is_valid(): rd.free_rid(analysis_buffer)
+	if spawn_buffer.is_valid(): rd.free_rid(spawn_buffer)
 	
 	# Invalidate RIDs
 	tex_state_a = RID()
@@ -1056,6 +1145,89 @@ func _free_resources():
 	ubo = RID()
 	stats_buffer = RID()
 	analysis_buffer = RID()
+	spawn_buffer = RID()
+
+
+func select_deck_slot(idx: int):
+	if idx < 0 or idx >= deck_cards.size():
+		return
+	selected_deck_slot = idx
+	_emit_gameplay_updated()
+
+func queue_deploy(uv: Vector2) -> bool:
+	if selected_deck_slot < 0 or selected_deck_slot >= deck_cards.size():
+		return false
+	if uv.x < 0.0 or uv.x > 1.0 or uv.y < 0.0 or uv.y > 1.0:
+		return false
+	var card = deck_cards[selected_deck_slot]
+	var cost = float(card.get("cost", 0.0))
+	var cooldown = float(card.get("cooldown_remaining", 0.0))
+	if biomass < cost or cooldown > 0.0:
+		return false
+	biomass -= cost
+	deck_cards[selected_deck_slot]["cooldown_remaining"] = float(card.get("cooldown", 0.0))
+	deploy_queue.append({"uv": uv, "card": card.duplicate(true)})
+	_emit_gameplay_updated()
+	return true
+
+func _dispatch_spawn(uv: Vector2, card: Dictionary):
+	if not pipeline_spawn.is_valid():
+		return
+	var genes: Array = card.get("genes", [])
+	if genes.size() < 16:
+		return
+	var spawn_data = PackedFloat32Array([
+		uv.x, uv.y, float(card.get("radius", 12.0)), float(card.get("spawn_mass", 0.12)),
+		float(card.get("mode", 0.0)), 0.0, 0.0, 0.0,
+		genes[0], genes[1], genes[2], genes[3],
+		genes[4], genes[5], genes[6], genes[7],
+		genes[8], genes[9], genes[10], genes[11],
+		genes[12], genes[13], genes[14], genes[15]
+	])
+	var bytes = spawn_data.to_byte_array()
+	rd.buffer_update(spawn_buffer, 0, bytes.size(), bytes)
+	
+	var cur_state = tex_state_b if ping_pong else tex_state_a
+	var cur_genome = tex_genome_b if ping_pong else tex_genome_a
+	var cur_genome_ext = tex_genome_ext_b if ping_pong else tex_genome_ext_a
+	
+	var u_ubo = RDUniform.new()
+	u_ubo.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+	u_ubo.binding = 0
+	u_ubo.add_id(ubo)
+	var u_spawn = RDUniform.new()
+	u_spawn.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+	u_spawn.binding = 1
+	u_spawn.add_id(spawn_buffer)
+	var u_state = RDUniform.new()
+	u_state.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	u_state.binding = 2
+	u_state.add_id(cur_state)
+	var u_gen = RDUniform.new()
+	u_gen.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	u_gen.binding = 3
+	u_gen.add_id(cur_genome)
+	var u_gen_ext = RDUniform.new()
+	u_gen_ext.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	u_gen_ext.binding = 4
+	u_gen_ext.add_id(cur_genome_ext)
+	var set_spawn = rd.uniform_set_create([u_ubo, u_spawn, u_state, u_gen, u_gen_ext], shader_spawn, 0)
+	
+	var wg_x = int(ceil(params["res_x"] / 8.0))
+	var wg_y = int(ceil(params["res_y"] / 8.0))
+	var list = rd.compute_list_begin()
+	rd.compute_list_bind_compute_pipeline(list, pipeline_spawn)
+	rd.compute_list_bind_uniform_set(list, set_spawn, 0)
+	rd.compute_list_dispatch(list, wg_x, wg_y, 1)
+	rd.compute_list_end()
+	
+	# Keep ping-pong textures coherent after direct write
+	var other_state = tex_state_a if ping_pong else tex_state_b
+	var other_genome = tex_genome_a if ping_pong else tex_genome_b
+	var other_genome_ext = tex_genome_ext_a if ping_pong else tex_genome_ext_b
+	rd.texture_copy(cur_state, other_state, Vector3(0,0,0), Vector3(0,0,0), Vector3(params["res_x"], params["res_y"], 1), 0, 0, 0, 0)
+	rd.texture_copy(cur_genome, other_genome, Vector3(0,0,0), Vector3(0,0,0), Vector3(params["res_x"], params["res_y"], 1), 0, 0, 0, 0)
+	rd.texture_copy(cur_genome_ext, other_genome_ext, Vector3(0,0,0), Vector3(0,0,0), Vector3(params["res_x"], params["res_y"], 1), 0, 0, 0, 0)
 
 func set_parameter(param_name: String, value: float):
 	if params.has(param_name):

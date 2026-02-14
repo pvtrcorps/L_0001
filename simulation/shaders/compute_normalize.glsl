@@ -99,7 +99,6 @@ void main() {
     // We stored it in img_new_state.gb in the previous pass
     vec4 flowData = imageLoad(img_new_state, uv_i);
     vec2 velocity = flowData.gb; 
-    float mode_norm = clamp(flowData.a, 0.0, 1.0);
     
     // Optional: Smooth or Damping could happen here, but we keep it raw for now.
     
@@ -194,6 +193,6 @@ void main() {
         imageStore(img_new_genome, uv_i, vec4(0.0));
         imageStore(img_new_genome_ext, uv_i, vec4(0.0));
     } else {
-        imageStore(img_new_state, uv_i, vec4(finalMass, velocity, mode_norm));
+        imageStore(img_new_state, uv_i, vec4(finalMass, velocity, 0.0));
     }
 }

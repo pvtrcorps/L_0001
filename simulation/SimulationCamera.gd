@@ -51,10 +51,6 @@ func _input(event):
 			_handle_inspect_input(event.position, viewport_size)
 
 func _handle_inspect_input(screen_pos: Vector2, viewport_size: Vector2):
-	var uv = screen_to_uv(screen_pos, viewport_size)
-	emit_signal("inspect_requested", uv, true)
-
-func screen_to_uv(screen_pos: Vector2, viewport_size: Vector2) -> Vector2:
 	var aspect = viewport_size.x / viewport_size.y
 	var uv = screen_pos / viewport_size
 	
@@ -69,4 +65,5 @@ func screen_to_uv(screen_pos: Vector2, viewport_size: Vector2) -> Vector2:
 	uv /= camera_zoom
 	uv += camera_pos
 	uv += Vector2(0.5, 0.5)
-	return uv
+	
+	emit_signal("inspect_requested", uv, true)

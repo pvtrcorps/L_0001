@@ -13,7 +13,7 @@ var camera: SimulationCamera
 var params = {
 	"res_x": 1024.0, 
 	"res_y": 1024.0,
-	"dt": 0.1,
+	"dt": 0.2,
 	"seed": 0.0,
 	# Kernel shape (global - creates pattern types)
 	"R": 16.0,           # Kernel radius in pixels
@@ -23,17 +23,16 @@ var params = {
 	"init_density": 1.0,   # Higher density for better start
 	
 	# Advanced Physics (Flow Lenia style)
-	# Advanced Physics (Flow Lenia style)
-	"temperature": 0.65,   # Advection diffusion (s). Paper default: 0.65 (Currently Standard Bilinear)
-	"theta_A": 1.0,        # Global Density Multiplier. Canonical ~1.0? (Was 5.0)
-	"alpha_n": 3.0,        # Repulsion Sharpness. [NEW: 3.0 for Solid Bodies]. (Was 0.0)
+	"temperature": 0.65,   # Advection diffusion (s). Paper default: 0.65
+	"theta_A": 1.0,        # Global Density Multiplier. Canonical ~1.0
+	"alpha_n": 2.0,        # Repulsion Sharpness. Canonical 2.0
 	
 	# Signal Layer
 	"signal_diff": 0.0,    # Diffusion Rate
 	"signal_decay": 0.001,   # Decay Rate
-	"signal_advect": 1.0,  # Signal advection weight [0-1] (how much signals follow mass flow)
-	"flow_speed": 2.0,     # [NEW: 2.0 for Aristotelian Stability]. Multiplier for advection force
-	"fluid_momentum": 0.2, # [NEW: 0.2 Low Inertia]. Momentum/Inertia (0.0 = Aristotelian, 1.0 = Newtonian)
+	"signal_advect": 1.0,  # Signal advection weight [0-1]
+	"flow_speed": 1.0,     # [CANONICAL: 1.0]. Multiplier for advection force
+	"fluid_momentum": 0.0, # [CANONICAL: 0.0]. Aristotelian Physics (No Inertia)
 	
 	"beta_selection": 1.0, # Selection pressure for negotiation rule
 	
@@ -45,8 +44,8 @@ var params = {
 	# Signal Advanced
 	"signal_force_strength": 20.0,   # Multiplier for signal gradient force
 	"signal_emission_strength": 1.0, # Multiplier for signal secretion quantity
-	"interaction_beta": 1.0,         # [NEW] Kernel Interaction Strength (0.0 = Neutral)
-	"genetic_barrier": 1.0,          # [NEW] Genetic Flow Barrier (0.0 = Permeable, 1.0 = Impermeable)
+	"interaction_beta": 0.0,         # [CANONICAL: 0.0] No extra interaction
+	"genetic_barrier": 0.0,          # [CANONICAL: 0.0] Permeable
 	
 	# === GENE RANGES (16 GENES x 2 MIN/MAX) ===
 	# BLOCK A: Physiology (Body)

@@ -8,7 +8,11 @@ var histogram_display
 var species_container
 var tooltip_panel
 var tooltip_label
-
+var deck_bar
+var biomass_label
+var deploy_hint_label
+var deck_buttons = []
+var selected_slot := 0
 
 
 # UI Schema: Group Name -> List of [ParamKey, Label, Min, Max, Step]
@@ -72,6 +76,7 @@ func _ready():
 	sim.reset_simulation() # Reset to apply new genes
 	sim.stats_updated.connect(_on_stats_updated)
 	sim.species_hovered.connect(_on_species_hovered)
+	sim.gameplay_updated.connect(_on_gameplay_updated)
 
 func _build_ui():
 	# Stats Header
@@ -292,6 +297,42 @@ func _build_ui():
 	res_hbox.add_child(res_opt)
 	ui_container.add_child(res_hbox)
 
+	# Strategic deck HUD
+	ui_container.add_child(HSeparator.new())
+	var deck_title = Label.new()
+	deck_title.text = "DECK / BIOMASS"
+	deck_title.add_theme_color_override("font_color", Color(1.0, 0.8, 0.2))
+	deck_title.add_theme_font_size_override("font_size", 14)
+	ui_container.add_child(deck_title)
+	
+	biomass_label = Label.new()
+	biomass_label.text = "Biomass: ---"
+	biomass_label.add_theme_color_override("font_color", Color(0.7, 0.9, 1.0))
+	ui_container.add_child(biomass_label)
+	
+	deploy_hint_label = Label.new()
+	deploy_hint_label.text = "Left click map to deploy selected species."
+	deploy_hint_label.add_theme_font_size_override("font_size", 10)
+	deploy_hint_label.add_theme_color_override("font_color", Color(0.75, 0.75, 0.75))
+	ui_container.add_child(deploy_hint_label)
+	
+	deck_bar = HBoxContainer.new()
+	deck_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	deck_bar.add_theme_constant_override("separation", 4)
+	ui_container.add_child(deck_bar)
+	
+	for i in range(4):
+		var idx = i
+		var btn = Button.new()
+		btn.text = "Slot %d" % (idx + 1)
+		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		btn.pressed.connect(func():
+			selected_slot = idx
+			sim.select_deck_slot(idx)
+		)
+		deck_buttons.append(btn)
+		deck_bar.add_child(btn)
+
 	# Gene Histogram
 	ui_container.add_child(HSeparator.new())
 	var hist_header = Label.new()
@@ -385,6 +426,40 @@ func _on_species_hovered(info):
 	if tooltip_panel.visible:
 		var mpos = get_viewport().get_mouse_position()
 		tooltip_panel.position = mpos + Vector2(16, 16)
+
+
+func _on_gameplay_updated(biomass: float, deck_state: Array, selected: int):
+	selected_slot = selected
+	if biomass_label:
+		biomass_label.text = "Biomass: %.1f" % biomass
+	for i in range(deck_buttons.size()):
+		if i >= deck_state.size():
+			continue
+		var card = deck_state[i]
+		var cd = float(card.get("cooldown_remaining", 0.0))
+		var txt = "%d:%s\n%s C%.0f" % [i + 1, card.get("name", "Card"), card.get("role", "Role"), float(card.get("cost", 0.0))]
+		if cd > 0.0:
+			txt += " [%.1fs]" % cd
+		deck_buttons[i].text = txt
+		deck_buttons[i].modulate = Color(1.0, 0.95, 0.7) if i == selected_slot else Color(1,1,1)
+
+func _input(event):
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode >= KEY_1 and event.keycode <= KEY_4:
+			var idx = int(event.keycode - KEY_1)
+			selected_slot = idx
+			sim.select_deck_slot(idx)
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		if not sim.camera:
+			return
+		var panel = $CanvasLayer/UI/Panel
+		if panel and panel.get_global_rect().has_point(event.position):
+			return
+		var viewport_size = get_viewport().get_visible_rect().size
+		var uv = sim.camera.screen_to_uv(event.position, viewport_size)
+		var ok = sim.queue_deploy(uv)
+		if deploy_hint_label:
+			deploy_hint_label.text = "Deploy OK at (%.2f, %.2f)" % [uv.x, uv.y] if ok else "Cannot deploy: low biomass, cooldown, or out of bounds."
 
 func _process(_delta):
 	# Update tooltip pos if visible

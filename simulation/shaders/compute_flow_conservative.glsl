@@ -146,6 +146,9 @@ void main() {
         return; 
     }
 
+    float mode_norm = clamp(state.a, 0.0, 1.0);
+    float mode_id = round(mode_norm * 3.0); // 0 forage, 1 aggro, 2 defend, 3 replicate
+
     // === 1. Unpack Genes ===
     vec4 g1 = texture(tex_genome, uv);
     vec4 g2 = texture(tex_genome_ext, uv);
@@ -283,7 +286,33 @@ void main() {
     float mD = texelFetch(tex_state, d_uv, 0).r;
     float mU = texelFetch(tex_state, u_uv, 0).r;
     vec2 gradLocalDensity = vec2(mR - mL, mD - mU);
-    
+
+    // === 2.5 Brain layer (FSM) ===
+    float enemy_density = clamp(length(gradDensity) * 0.30, 0.0, 1.0);
+    float resource_signal = clamp(dot(texelFetch(tex_signal, uv_i, 0).rgb, myDetector), 0.0, 1.0);
+    float low_mass = 1.0 - clamp(myMass * 3.0, 0.0, 1.0);
+    float high_mass = clamp(myMass * 2.0, 0.0, 1.0);
+
+    float score_forage = resource_signal * 1.2 + (1.0 - enemy_density) * 0.5;
+    float score_aggro = enemy_density * 1.3 + high_mass * 0.6;
+    float score_defend = low_mass * 1.1 + enemy_density * 0.4;
+    float score_replicate = high_mass * 1.1 + resource_signal * 0.7 - enemy_density * 0.6;
+
+    float best_mode = 0.0;
+    float best_score = score_forage;
+    if (score_aggro > best_score) { best_score = score_aggro; best_mode = 1.0; }
+    if (score_defend > best_score) { best_score = score_defend; best_mode = 2.0; }
+    if (score_replicate > best_score) { best_score = score_replicate; best_mode = 3.0; }
+
+    // Hysteresis: avoid rapid flipping unless meaningfully better
+    float current_score = score_forage;
+    if (mode_id == 1.0) current_score = score_aggro;
+    else if (mode_id == 2.0) current_score = score_defend;
+    else if (mode_id == 3.0) current_score = score_replicate;
+    if (best_score > current_score + 0.08) {
+        mode_id = best_mode;
+    }
+
     // F. Compute Velocity Field
     vec2 shape_c_inertia = unpack2(g1.a);
     float g_inertia = shape_c_inertia.y;
@@ -304,7 +333,20 @@ void main() {
     
     vec2 flow_field = (1.0 - alpha) * totalAttraction - alpha * gradLocalDensity;
     
-    float force_mult = p.u_flow_speed * (0.2 + g_mobility * 1.8);
+    float mode_speed_mult = 1.0;
+    float metabolism = 0.0;
+    if (mode_id == 1.0) {
+        mode_speed_mult = 1.65; // Aggro
+        metabolism = 0.012;
+    } else if (mode_id == 2.0) {
+        mode_speed_mult = 0.12; // Defend
+        metabolism = 0.003;
+    } else if (mode_id == 3.0) {
+        mode_speed_mult = 1.25; // Replicate
+        metabolism = 0.018;
+    }
+
+    float force_mult = p.u_flow_speed * (0.2 + g_mobility * 1.8) * mode_speed_mult;
     vec2 target_vel = force_mult * flow_field;
     
     // SAFETY 2: Clamp Target Velocity (CFL Condition)
@@ -403,7 +445,8 @@ void main() {
     
     
     // Mass Accumulation (High Precision)
-    uint total_amount = uint(round(myMass * MASS_SCALE));
+    float effective_mass = myMass * clamp(1.0 - metabolism * p.u_dt, 0.0, 1.0);
+    uint total_amount = uint(round(effective_mass * MASS_SCALE));
     uint kept_mass = 0u; // Mass blocked by barrier
     
     if (total_amount > 0) {
@@ -500,5 +543,5 @@ void main() {
     // Store calculated velocity (source, instantaneous) into the G/B channels of the destination state
     // This allows compute_normalize to pick it up and preserve it for the next frame's signal advection.
     // We store it in .gb to match the standard format (Mass, VelX, VelY, Aux)
-    imageStore(img_new_state, uv_i, vec4(0.0, vel.x, vel.y, 0.0));
+    imageStore(img_new_state, uv_i, vec4(0.0, vel.x, vel.y, clamp(mode_id / 3.0, 0.0, 1.0)));
 }

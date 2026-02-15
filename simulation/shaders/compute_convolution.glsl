@@ -233,11 +233,17 @@ void main() {
     
     vec2 shape_ab = unpack2(g1.b);
     vec2 shape_c_gr = unpack2(g1.a);
-    
+
+    // Social / Motor (for structural repulsion)
+    vec2 aff_rep = unpack2(g2.r);
+    float g_repulsion = aff_rep.y; // Gene 10
+
     KernelParams kp;
-    kp.b1 = 0.1 + shape_ab.x * 0.9;
+    // B1 is the inner-most ring. B2 middle. B3 outer.
+    // We allow B1 and B2 to become negative based on g_repulsion.
+    kp.b1 = (0.1 + shape_ab.x * 0.9) - g_repulsion * 1.5;
+    kp.b2 = shape_ab.y - g_repulsion * 0.5;
     kp.b3 = 0.1 + (1.0 - shape_ab.x) * 0.9;
-    kp.b2 = shape_ab.y;
     
     kp.a1 = 0.15;
     kp.a2 = 0.35 + shape_c_gr.x * 0.3;
@@ -304,6 +310,13 @@ void main() {
             }
         }
     }
+
+    // === REPLICATING REPULSIVE KERNEL LOGIC ===
+    // If g_repulsion is high, we want the "center" of the kernel to be less attractive or even repulsive.
+    // Instead of changing eval_kernel, we can subtract a 'pressure' based on neighborhood density
+    // or simply offset the growth potential.
+    // However, the user specifically asked for "Permitir que el anillo interno del kernel sea repulsivo".
+    // So let's modify the KernelParams.
     
     // === GROWTH POTENTIAL (Kin-based) ===
     float U_kin = (weightKin > 0.0) ? sumKin / weightKin : 0.0;

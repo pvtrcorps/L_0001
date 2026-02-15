@@ -24,7 +24,7 @@ var params = {
 	
 	# Advanced Physics (Flow Lenia style)
 	"temperature": 0.65,   # Advection diffusion (s). Paper default: 0.65
-	"theta_A": 1.0,        # Global Density Multiplier. Canonical ~1.0
+	"theta_A": 0.7,        # Global Density Multiplier. (Lowered to trigger repulsion earlier)
 	"alpha_n": 2.0,        # Repulsion Sharpness. Canonical 2.0
 	
 	# Signal Layer
@@ -61,8 +61,8 @@ var params = {
 	"g_inertia_min": 0.0, "g_inertia_max": 1.0, # 8. Inertial Mass
 	
 	# BLOCK C: Social & Motor (Mind)
-	"g_affinity_min": 0.0, "g_affinity_max": 1.0, # 9. Cohesion
-	"g_repulsion_min": 0.0, "g_repulsion_max": 1.0, # 10. Spacing
+	"g_affinity_min": 0.2, "g_affinity_max": 1.0, # 9. Cohesion (Defaulting slightly higher)
+	"g_repulsion_min": 0.3, "g_repulsion_max": 0.8, # 10. Spacing (Incentivize structure)
 	"g_density_tol_min": 0.0, "g_density_tol_max": 1.0, # 11. Overcrowding Tol
 	"g_mobility_min": 0.0, "g_mobility_max": 1.0, # 12. Speed Base
 	

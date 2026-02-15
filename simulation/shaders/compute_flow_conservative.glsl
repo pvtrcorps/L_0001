@@ -298,11 +298,13 @@ void main() {
     
     // === FINAL FORCE CALCULATION (TARGET VELOCITY) ===
     // Flow Lenia Equation: F = (1 - alpha) * grad(U) - alpha * grad(A)
-    // - totalAttraction = grad(U) (Affinity/Growth Potential)
-    // - gradLocalDensity = grad(A) (Density Repulsion/Diffusion)
-    // This formulation prevents "fighting" forces: when crowded (alpha->1), attraction turns OFF completely.
+    // - totalAttraction = grad(U) (Affinity/Growth Potential/Signals)
+    // - totalRepulsion = grad(A) (Density Repulsion/Diffusion)
+    // We enhance grad(A) with Neighborhood Density Gradient (gradDensity) to 
+    // prevent building up massive blobs and encourage discrete creatures.
     
-    vec2 flow_field = (1.0 - alpha) * totalAttraction - alpha * gradLocalDensity;
+    vec2 totalRepulsion = gradLocalDensity + gradDensity * (0.5 + g_repulsion * 4.5);
+    vec2 flow_field = (1.0 - alpha) * totalAttraction - alpha * totalRepulsion;
     
     float force_mult = p.u_flow_speed * (0.2 + g_mobility * 1.8);
     vec2 target_vel = force_mult * flow_field;

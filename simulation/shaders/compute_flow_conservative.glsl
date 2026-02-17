@@ -19,7 +19,7 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_flow_speed;
     float u_init_clusters;
     float u_init_density;
-    float u_fluid_momentum; // Was u_pad_col
+    float u_fluid_momentum; 
     
     // 1. Gene Ranges (16 Genes * 2) = 32 floats
     // Block A: Physiology
@@ -40,8 +40,9 @@ layout(set = 0, binding = 0, std430) buffer Params {
     // Signal Extras
     float u_signal_force_strength;
     float u_signal_emission_strength;
-    float u_interaction_beta; // [NEW] Interaction Strength
-    float u_genetic_barrier;  // [NEW] Genetic Flow Barrier
+    float u_interaction_beta; 
+    float u_genetic_barrier;  
+    float u_colonize_thr;
 } p;
 
 layout(set = 0, binding = 1) uniform sampler2D tex_state;
@@ -411,28 +412,31 @@ void main() {
     if (total_amount > 0) {
         
         uint remaining = total_amount;
-        int last_valid_idx = -1;
+        int target_remainder_idx = 4; // Center by default
+        float max_w = -1.0;
+        
+        // Find highest weight neighbor (prioritize center if weights are equal)
         for (int i = 0; i < 9; i++) {
-            float w = weights[i] * norm_factor;
-            if (w >= 0.001) {
-                last_valid_idx = i;
+            float w = (i == 4) ? weights[i] + 0.0001 : weights[i];
+            if (w > max_w) {
+                max_w = w;
+                target_remainder_idx = i;
             }
         }
         
         // Distribute to 9 neighbors
         for (int i = 0; i < 9; i++) {
-            float w = weights[i] * norm_factor;
-            if (w < 0.001) continue; // Skip negligible contributions
+            if (i == target_remainder_idx) continue;
             
-            uint amount = uint(round(float(total_amount) * w));
-            // Cap at remaining to avoid creating mass
+            float w = weights[i] * norm_factor;
+            if (w < 0.001) continue; 
+            
+            uint amount = uint(floor(float(total_amount) * w)); 
             if (amount > remaining) amount = remaining;
-            if (i == last_valid_idx) amount = remaining;
             remaining -= amount;
             
             if (amount == 0u) continue;
             
-            // Target Coord
             ivec2 target_uv = (center_i + offsets[i] + ivec2(p.u_res)) % ivec2(p.u_res);
             
              // BARRIER FUNCTION
@@ -471,15 +475,23 @@ void main() {
                 // We compute score for THIS source claiming THIS target.
                 
                 float source_pot = texture(tex_potential, uv).r; 
-                uint src_idx = uint(uv_i.y) * uint(p.u_res.x) + uint(uv_i.x);
-                src_idx = src_idx & 0xFFFFFFu; 
+                uint src_idx = (uint(uv_i.y) * uint(p.u_res.x) + uint(uv_i.x));
                 
-                // Unique noise per target-source pair to avoid coherent artifacts
                 vec2 noise_uv = uv + vec2(float(i)*0.1, p.u_seed); 
-                uint score = calculate_gumbel_score(amount, source_pot, p.u_beta, noise_uv);
+                uint score_8bit = calculate_gumbel_score(amount, source_pot, p.u_beta, noise_uv);
                 
-                if (score > 0u) {
-                    imageAtomicMax(img_winner_tracker, target_uv, (score << 24u) | src_idx);
+                // Unbiased Tie-breaker: Spatial hash of the source index
+                uint jitter_2bit = pcg_hash_1d(src_idx) & 0x3u;
+                
+                // Bit Layout (32-bit):
+                // [31..24] Score (8-bit)
+                // [23..22] Jitter (2-bit)
+                // [21..0 ] Source Index (22-bit) -> Supports up to 2048x2048
+                uint packed_comp = (score_8bit << 24u) | (jitter_2bit << 22u) | (src_idx & 0x3FFFFFu);
+                
+                uint thr_uint = uint(p.u_colonize_thr * MASS_SCALE);
+                if (score_8bit > 0u && amount > thr_uint) {
+                    imageAtomicMax(img_winner_tracker, target_uv, packed_comp);
                 }
                 
             } else {
@@ -488,9 +500,10 @@ void main() {
         }
 
         // Any residual quantization error remains in place to preserve strict conservation.
+        // We assign it to the target_remainder_idx instead of the last valid index.
         if (remaining > 0u) {
-            imageAtomicAdd(img_mass_accum, uv_i, remaining);
-            kept_mass += remaining;
+            ivec2 remainder_uv = (center_i + offsets[target_remainder_idx] + ivec2(p.u_res)) % ivec2(p.u_res);
+            imageAtomicAdd(img_mass_accum, remainder_uv, remaining);
         }
         
         // Return kept mass to self (bounce back)

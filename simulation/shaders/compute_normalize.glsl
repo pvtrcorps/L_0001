@@ -19,7 +19,7 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_flow_speed;
     float u_init_clusters;
     float u_init_density;
-    float u_colonize_thr;
+    float u_fluid_momentum;
     
     // 1. Gene Ranges (16 Genes * 2) = 32 floats
     // Block A: Physiology
@@ -42,6 +42,7 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_signal_emission_strength;
     float u_pad1;
     float u_pad2;
+    float u_colonize_thr;
 } p;
 
 layout(set = 0, binding = 1, r32ui) uniform uimage2D img_mass_accum;
@@ -114,7 +115,7 @@ void main() {
     vec4 finalGenome2 = texture(tex_genome_ext, uv); 
     
     if (packed != 0) {
-        uint winner_idx = packed & 0xFFFFFFu; 
+        uint winner_idx = packed & 0x3FFFFFu; // Extract bottom 22 bits (up to 2048x2048)
         
         ivec2 res = ivec2(p.u_res);
         ivec2 winner_coords = ivec2(winner_idx % res.x, winner_idx / res.x);
@@ -188,11 +189,19 @@ void main() {
     }
     
     // Store final state (Mass, Velocity, Debug/Extra)
+    // IDENTITY PRUNING: Only keep genome if mass is above threshold
+    if (finalMass < p.u_colonize_thr) {
+        finalGenome1 = vec4(0.0);
+        finalGenome2 = vec4(0.0);
+    }
+
     if (finalMass <= 0.0) {
         imageStore(img_new_state, uv_i, vec4(0.0));
         imageStore(img_new_genome, uv_i, vec4(0.0));
         imageStore(img_new_genome_ext, uv_i, vec4(0.0));
     } else {
         imageStore(img_new_state, uv_i, vec4(finalMass, velocity, 0.0));
+        imageStore(img_new_genome, uv_i, finalGenome1);
+        imageStore(img_new_genome_ext, uv_i, finalGenome2);
     }
 }

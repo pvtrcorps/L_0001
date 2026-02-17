@@ -28,7 +28,7 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_flow_speed;
     float u_init_clusters;
     float u_init_density;
-    float u_colonize_thr;
+    float u_fluid_momentum;
     
     // 1. Gene Ranges (16 Genes * 2) = 32 floats
     // Block A: Physiology
@@ -49,8 +49,9 @@ layout(set = 0, binding = 0, std430) buffer Params {
     // Signal Extras
     float u_signal_force_strength;
     float u_signal_emission_strength;
-    float u_interaction_beta; // [NEW] Interaction Strength
-    float u_genetic_barrier;  // [NEW] Genetic Flow Barrier
+    float u_interaction_beta; 
+    float u_genetic_barrier;  
+    float u_colonize_thr;
 } p;
 
 layout(set = 0, binding = 1) uniform sampler2D tex_state;
@@ -285,7 +286,7 @@ void main() {
             float dist = length(vec2(float(dx), float(dy)));
             float w = eval_kernel(dist, R_actual, kp);
            
-            if (w > 0.0001 && neighborMass > 0.0001) {
+            if (w > 0.0001 && neighborMass >= p.u_colonize_thr) {
                 // 1. IDENTITY CHECK (Self/Kin Recognition)
                 float genetic_dist = abs(my_emission_hue - neighborHue);
                 if (genetic_dist > 0.5) genetic_dist = 1.0 - genetic_dist;

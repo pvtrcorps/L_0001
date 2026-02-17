@@ -19,7 +19,7 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_flow_speed;
     float u_init_clusters;
     float u_init_density;
-    float u_colonize_thr;
+    float u_fluid_momentum;
     
     // 1. Gene Ranges (16 Genes * 2) = 32 floats
     // Block A: Physiology
@@ -42,6 +42,7 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_signal_emission_strength;
     float u_pad1;
     float u_pad2;
+    float u_colonize_thr;
 } p;
 
 layout(set = 0, binding = 1) uniform sampler2D tex_signal_src;

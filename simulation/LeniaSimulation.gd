@@ -20,26 +20,27 @@ var params = {
 
 	# Initialization
 	"init_clusters": 24.0,
-	"init_density": 1.0,   # Higher density for better start
+	"init_density": 0.5,   # Higher density for better start
+	"colonize_thr": 0.001, # [DUST THRESOLHD] Mass below this loses identity
 	
 	# Advanced Physics (Flow Lenia style)
-	"temperature": 0.65,   # Advection diffusion (s). Paper default: 0.65
-	"theta_A": 0.7,        # Global Density Multiplier. (Lowered to trigger repulsion earlier)
-	"alpha_n": 2.0,        # Repulsion Sharpness. Canonical 2.0
+	"temperature": 0.8,   # Advection diffusion (s). Paper default: 0.65
+	"theta_A": 1.0,        # Global Density Multiplier. (Lowered to trigger repulsion earlier)
+	"alpha_n": 4.0,        # Repulsion Sharpness. Canonical 2.0
 	
 	# Signal Layer
-	"signal_diff": 0.0,    # Diffusion Rate
-	"signal_decay": 0.001,   # Decay Rate
+	"signal_diff": 2.0,    # Diffusion Rate
+	"signal_decay": 0.0,   # Decay Rate
 	"signal_advect": 1.0,  # Signal advection weight [0-1]
 	"flow_speed": 1.0,     # [CANONICAL: 1.0]. Multiplier for advection force
-	"fluid_momentum": 0.0, # [CANONICAL: 0.0]. Aristotelian Physics (No Inertia)
+	"fluid_momentum": 0.5, # [CANONICAL: 0.0]. Aristotelian Physics (No Inertia)
 	
 	"beta_selection": 1.0, # Selection pressure for negotiation rule
 	
 	# Wind / Atmosphere
-	"wind_scale": 10.00,     # Noise scale
+	"wind_scale": 2.0,     # Noise scale
 	"wind_strength": 2.0,  # Wind force multiplier
-	"wind_speed": 0.1,     # Animation speed
+	"wind_speed": 0.05,     # Animation speed
 	
 	# Signal Advanced
 	"signal_force_strength": 20.0,   # Multiplier for signal gradient force
@@ -296,11 +297,14 @@ func _update_ubo():
 		params["g_secretion_min"], params["g_secretion_max"], params["g_sensitivity_min"], params["g_sensitivity_max"],
 		params["g_emission_hue_min"], params["g_emission_hue_max"], params["g_detection_hue_min"], params["g_detection_hue_max"],
 		
-	# Chunk 4 (Wind/Atmosphere) - Appended to end
+		# Chunk 4 (Wind/Atmosphere) - Appended to end
 		params_time, params["wind_scale"], params["wind_strength"], params["wind_speed"],
 		
 		# Chunk 5 (Signal Extras) - [NEW]
-		params["signal_force_strength"], params["signal_emission_strength"], params["interaction_beta"], params["genetic_barrier"]
+		params["signal_force_strength"], params["signal_emission_strength"], params["interaction_beta"], params["genetic_barrier"],
+		
+		# Chunk 6 (Cleanup)
+		params["colonize_thr"], 0.0, 0.0, 0.0
 	])
 	
 	var bytes = buffer.to_byte_array()
@@ -455,7 +459,7 @@ func _dispatch_init():
 func _create_uniforms():
 	# UBO: 52 floats * 4 bytes = 208 bytes
 	var buffer = PackedFloat32Array()
-	buffer.resize(56)
+	buffer.resize(60)
 	var bytes = buffer.to_byte_array()
 	ubo = rd.storage_buffer_create(bytes.size(), bytes)
 	

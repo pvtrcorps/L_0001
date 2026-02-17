@@ -273,12 +273,10 @@ void main() {
     // gradGrowth: Move toward kin (growth potential)
     // gradSignal: Move toward preferred signals
     // gradInteract: Move toward attraction / away from repulsion (NEW!)
-    vec2 totalAttraction = gradGrowth 
-                         + gradSignal * (g_sensitivity * p.u_signal_force_strength)
-                         + gradInteract * (0.5 + g_repulsion * 2.5);
     
-    // E. Local Density Pressure (Same-species crowding)
-    // This is the classic Lenia repulsion from local mass
+    // E. Local Density Pressure (Total mass crowding)
+    // This is the classic Lenia repulsion but perceived across ALL species.
+    // We use gradDensity (from convolution) for long-range and gradLocalDensity for short-range.
     float mR = texelFetch(tex_state, r_uv, 0).r;
     float mL = texelFetch(tex_state, l_uv, 0).r;
     float mD = texelFetch(tex_state, d_uv, 0).r;
@@ -289,22 +287,39 @@ void main() {
     vec2 shape_c_inertia = unpack2(g1.a);
     float g_inertia = shape_c_inertia.y;
 
-    // Density tolerance threshold
-    float local_theta = p.u_theta_A * (0.5 + g_density_tol * 2.0);
-    float alpha_raw = pow(max(myMass, 0.0) / max(local_theta, 0.001), p.u_alpha_n);
+    // === UNIVERSAL CROWDING (ALPHA) ===
+    // Canonical Flow Lenia: Alpha should depend on total local density (U_density)
+    // If ANY species are crowding this area, I should feel pressed to move/diffuse.
+    float U_total_density = texture(tex_potential, uv).g;
     
-    // SAFETY 1: Clamp Alpha strictly to [0,1] as per Flow Lenia paper (Eq. 2)
-    // This ensures smooth interpolation between Attraction (Empty) and Diffusion (Crowded)
+    float local_theta = p.u_theta_A * (0.5 + g_density_tol * 2.0);
+    // Use the maximum of my own mass and the neighborhood density to feel pressure
+    float effective_density = max(myMass, U_total_density);
+    float alpha_raw = pow(effective_density / max(local_theta, 0.001), p.u_alpha_n);
+    
+    // SAFETY 1: Clamp Alpha strictly to [0,1]
     float alpha = clamp(alpha_raw, 0.0, 1.0);
     
     // === FINAL FORCE CALCULATION (TARGET VELOCITY) ===
-    // Flow Lenia Equation: F = (1 - alpha) * grad(U) - alpha * grad(A)
-    // - totalAttraction = grad(U) (Affinity/Growth Potential/Signals)
-    // - totalRepulsion = grad(A) (Density Repulsion/Diffusion)
-    // We enhance grad(A) with Neighborhood Density Gradient (gradDensity) to 
-    // prevent building up massive blobs and encourage discrete creatures.
+    // F = (1 - alpha) * grad(U) - alpha * grad(A)
     
-    vec2 totalRepulsion = gradLocalDensity + gradDensity * (0.5 + g_repulsion * 4.5);
+    // Genetic Barrier (Inmiscibility):
+    // If barrier is high, add a force that pushes away from different species 
+    // based on gradDensity (total) vs gradLocalDensity (self).
+    vec2 gradOtherSpecies = gradDensity - gradLocalDensity;
+    vec2 barrierForce = gradOtherSpecies * p.u_genetic_barrier * 5.0;
+    
+    // Interaction Force:
+    // Scale gradInteract by the global u_interaction_beta for UI control
+    vec2 interactionForce = gradInteract * p.u_interaction_beta * (0.5 + g_repulsion * 2.5);
+
+    vec2 totalAttraction = gradGrowth 
+                         + gradSignal * (g_sensitivity * p.u_signal_force_strength)
+                         + interactionForce;
+    
+    vec2 totalRepulsion = gradLocalDensity + barrierForce;
+    
+    // Smooth interpolation between attraction and repulsion
     vec2 flow_field = (1.0 - alpha) * totalAttraction - alpha * totalRepulsion;
     
     float force_mult = p.u_flow_speed * (0.2 + g_mobility * 1.8);
@@ -439,40 +454,8 @@ void main() {
             
             ivec2 target_uv = (center_i + offsets[i] + ivec2(p.u_res)) % ivec2(p.u_res);
             
-             // BARRIER FUNCTION
-            bool blocked = false;
-            float barrier = p.u_genetic_barrier;
-            
-            if (barrier > 0.01) {
-                float dst_mass = texelFetch(tex_state, target_uv, 0).r;
-                if (dst_mass > 0.05) {
-                     vec4 g2 = texelFetch(tex_genome_ext, target_uv, 0);
-                     uint bits = floatBitsToUint(g2.a) & ~0x40000000u;
-                     float dst_emit = float((bits >> 15u) & 0x7FFFu) / 32767.0;
-                     
-                     float diff = abs(g_emission_hue - dst_emit);
-                     if (diff > 0.5) diff = 1.0 - diff;
-                     if (diff > 0.15) blocked = true;
-                }
-            }
-            
-            if (!blocked) {
+            if (true) { // Barrier is now handled by Force Fields in the flow step
                 imageAtomicAdd(img_mass_accum, target_uv, amount);
-                
-                // WINNER TRACKING (Gumbel-Max)
-                // Use the standardized score calculation
-                // Re-calculate noise for each target to be unique? 
-                // Actually the "noise" is associated with the *source* claiming the target.
-                // We use uv (source ID) + target_uv (context)??
-                // Reference uses: log(mass) + Gumbel.
-                // We just need a consistent tie-breaker.
-                
-                // Reuse the macro logic but inline for 9-loop
-                // We need to pass the target coordinate to get a unique hash if we want?
-                // Actually, standard Gumbel-Max: Score is characteristic of the CHOICE (Source).
-                // So Score = log(my_mass_sent) + Noise.
-                // We can compute noise once per source? No, Gumbel trick establishes max.
-                // We compute score for THIS source claiming THIS target.
                 
                 float source_pot = texture(tex_potential, uv).r; 
                 uint src_idx = (uint(uv_i.y) * uint(p.u_res.x) + uint(uv_i.x));
@@ -483,19 +466,12 @@ void main() {
                 // Unbiased Tie-breaker: Spatial hash of the source index
                 uint jitter_2bit = pcg_hash_1d(src_idx) & 0x3u;
                 
-                // Bit Layout (32-bit):
-                // [31..24] Score (8-bit)
-                // [23..22] Jitter (2-bit)
-                // [21..0 ] Source Index (22-bit) -> Supports up to 2048x2048
                 uint packed_comp = (score_8bit << 24u) | (jitter_2bit << 22u) | (src_idx & 0x3FFFFFu);
                 
                 uint thr_uint = uint(p.u_colonize_thr * MASS_SCALE);
                 if (score_8bit > 0u && amount > thr_uint) {
                     imageAtomicMax(img_winner_tracker, target_uv, packed_comp);
                 }
-                
-            } else {
-                kept_mass += amount;
             }
         }
 

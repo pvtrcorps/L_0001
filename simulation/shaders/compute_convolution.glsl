@@ -258,11 +258,11 @@ void main() {
     
     // === TRI-POTENTIAL SYSTEM ===
     // sumKin: Mass from SAME species (for growth physics)
-    // sumAll: Mass from ALL species (for density awareness)
+    // sumAll: Mass from ALL species (for density awareness / crowding)
     // sumInteract: Weighted interaction potential (attraction/repulsion)
     float sumKin = 0.0;
     float sumAll = 0.0;
-    float sumInteract = 0.0;  // Can be negative (repulsion) or positive (attraction)
+    float sumInteract = 0.0;  
     float weightKin = 0.0;
     float weightAll = 0.0;
     float weightInteract = 0.0;
@@ -287,59 +287,51 @@ void main() {
             float w = eval_kernel(dist, R_actual, kp);
            
             if (w > 0.0001 && neighborMass >= p.u_colonize_thr) {
-                // 1. IDENTITY CHECK (Self/Kin Recognition)
+                // Circular distance in hue space [0, 0.5]
                 float genetic_dist = abs(my_emission_hue - neighborHue);
                 if (genetic_dist > 0.5) genetic_dist = 1.0 - genetic_dist;
                 
-                // Always accumulate ALL mass for density (sumAll) AND growth (sumKin).
-                // This is Strict Flow Lenia: Universal Perception.
-                // The "Species" identity is defined by my local parameters (P), not by who I eat.
+                // 1. Growth Potential (Kin Recognition)
+                // We use a strict threshold for "kin" - very close in genetic space
+                if (genetic_dist < 0.05) {
+                    sumKin += neighborMass * w;
+                    weightKin += w;
+                }
                 
+                // 2. Total Density Potential (Perception Universal)
+                // Fundamental for crowding/diffusion physics
                 sumAll += neighborMass * w;
                 weightAll += w;
                 
-                sumKin += neighborMass * w;
-                weightKin += w;
-                
-                // Optional: Helper field for specific interaction forces (non-canonical but useful)
-                // If neighbors are different, calculate their specific attraction/repulsion rating
-                if (genetic_dist >= 0.1) {
-                    float strength = get_interaction_strength(g_detection_hue, neighborHue);
-                    sumInteract += neighborMass * w * strength;
-                    weightInteract += w;
-                }
+                // 3. Interaction Potential (Attraction/Repulsion based on Detection Gene)
+                // This is the active "will" of the creature
+                float strength = get_interaction_strength(g_detection_hue, neighborHue);
+                sumInteract += neighborMass * w * strength;
+                weightInteract += w;
             }
         }
     }
 
-    // === REPLICATING REPULSIVE KERNEL LOGIC ===
-    // If g_repulsion is high, we want the "center" of the kernel to be less attractive or even repulsive.
-    // Instead of changing eval_kernel, we can subtract a 'pressure' based on neighborhood density
-    // or simply offset the growth potential.
-    // However, the user specifically asked for "Permitir que el anillo interno del kernel sea repulsivo".
-    // So let's modify the KernelParams.
-    
     // === GROWTH POTENTIAL (Kin-based) ===
     float U_kin = (weightKin > 0.0) ? sumKin / weightKin : 0.0;
     float mu = g_mu; 
-    float sigma = 0.001 + g_sigma * 0.2; 
+    float sigma = 0.001 + g_sigma * 0.2;
     float diff = (U_kin - mu);
     float exp_term = exp(-0.5 * (diff * diff) / max(sigma * sigma, 0.0001));
     float U_growth = 2.0 * exp_term - 1.0; 
     
     // === DENSITY POTENTIAL (All species) ===
+    // Represents total crowding in the area.
     float U_density = (weightAll > 0.0) ? sumAll / weightAll : 0.0;
     
     // === INTERACTION POTENTIAL (Attraction/Repulsion field) ===
-    // Positive = net attraction nearby, Negative = net repulsion nearby
+    // Positive = attraction, Negative = repulsion
     float U_interact = (weightInteract > 0.0) ? sumInteract / weightInteract : 0.0;
-    // Scale by beta for controllable strength
-    U_interact *= p.u_interaction_beta;
     
     // Output:
-    // R: Growth Potential G(U) - based on kin
-    // G: Total Density U_all - for crowding avoidance
-    // B: Interaction Potential - for attraction/repulsion movement
+    // R: Growth Potential G(U) - based on kin (Survival)
+    // G: Total Density U_all - for universal crowding avoidance (Space)
+    // B: Interaction Potential - for active inter-species movement (Social)
     imageStore(img_potential, gid, vec4(U_growth, U_density, U_interact, 0.0));
 }
 

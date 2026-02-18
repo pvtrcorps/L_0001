@@ -19,8 +19,8 @@ extends Resource
 @export var temperature: float = 0.65   # Advection diffusion (s)
 @export var identity_thr: float = 0.2   # Difference to be considered enemy
 @export var colonize_thr: float = 0.15  # Mass needed to resist invasion
-@export var theta_A: float = 1.0        # Global Density Multiplier
-@export var alpha_n: float = 3.0        # Repulsion Sharpness
+@export var theta_A: float = 1.0        # [DEPRECATED] UBO padding
+@export var alpha_n: float = 3.0        # [DEPRECATED] UBO padding
 @export var flow_speed: float = 5.0     # Multiplier for advection force
 @export var beta_selection: float = 1.0 # Selection pressure
 @export var fluid_momentum: float = 1.0 # Momentum/Inertia (0.0 = Aristotelian, 1.0 = Newtonian)
@@ -48,16 +48,16 @@ extends Resource
 @export var g_shape_b_max: float = 1.0
 @export var g_shape_c_min: float = 0.0
 @export var g_shape_c_max: float = 1.0
-@export var g_inertia_min: float = 0.0
-@export var g_inertia_max: float = 1.0
+@export var g_inertia_min: float = 0.0  # [DEPRECATED]
+@export var g_inertia_max: float = 1.0  # [DEPRECATED]
 
 @export_group("Genetics: Social & Motor")
-@export var g_affinity_min: float = 0.0
-@export var g_affinity_max: float = 1.0
-@export var g_repulsion_min: float = 0.0
-@export var g_repulsion_max: float = 1.0
-@export var g_density_tol_min: float = 0.0
-@export var g_density_tol_max: float = 1.0
+@export var g_affinity_min: float = 0.0  # [DEPRECATED]
+@export var g_affinity_max: float = 1.0  # [DEPRECATED]
+@export var g_repulsion_min: float = 0.0 # Hollow Core (kernel shape)
+@export var g_repulsion_max: float = 1.0 # Hollow Core (kernel shape)
+@export var g_density_tol_min: float = 0.0 # [DEPRECATED]
+@export var g_density_tol_max: float = 1.0 # [DEPRECATED]
 @export var g_mobility_min: float = 0.0
 @export var g_mobility_max: float = 1.0
 

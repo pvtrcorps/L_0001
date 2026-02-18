@@ -156,12 +156,9 @@ void main() {
     float g_viscosity = rad_visc.y; // [0-1] Inertia/Drag
     
     // Social / Motor
-    vec2 aff_rep = unpack2(g2.r);
-    float g_affinity = aff_rep.x;   // [0-1] Cohesion
-    float g_repulsion = aff_rep.y;  // [0-1] Personal Space
+    vec2 aff_rep = unpack2(g2.r);  // .x=affinity, .y=repulsion (reserved for future)
     
     vec2 tol_mob = unpack2(g2.g);
-    float g_density_tol = tol_mob.x;// [0-1] Pressure Resistance
     float g_mobility = tol_mob.y;   // [0-1] Speed Multiplier
     
     // Senses
@@ -175,151 +172,101 @@ void main() {
     // === 2. Calculate Forces ===
     
     // A. Growth Potential Gradient (Attraction toward kin)
-    // Uses tex_potential.R = G(U) from KIN-based convolution
+    // Uses tex_potential: R = U_growth, G = U_density, B = U_interact
     vec2 pixel_size = 1.0 / p.u_res;
     
-    // Sobel Filter for Growth Potential (R channel)
-    float gx = 0.0;
-    gx += -1.0 * texture(tex_potential, uv + vec2(-1, -1)*pixel_size).r;
-    gx += -2.0 * texture(tex_potential, uv + vec2(-1,  0)*pixel_size).r;
-    gx += -1.0 * texture(tex_potential, uv + vec2(-1,  1)*pixel_size).r;
-    gx +=  1.0 * texture(tex_potential, uv + vec2( 1, -1)*pixel_size).r;
-    gx +=  2.0 * texture(tex_potential, uv + vec2( 1,  0)*pixel_size).r;
-    gx +=  1.0 * texture(tex_potential, uv + vec2( 1,  1)*pixel_size).r;
+    // Cache 3x3 potential samples (avoids redundant texture fetches)
+    vec4 pot_TL = texture(tex_potential, uv + vec2(-1, -1)*pixel_size);
+    vec4 pot_TC = texture(tex_potential, uv + vec2( 0, -1)*pixel_size);
+    vec4 pot_TR = texture(tex_potential, uv + vec2( 1, -1)*pixel_size);
+    vec4 pot_ML = texture(tex_potential, uv + vec2(-1,  0)*pixel_size);
+    vec4 pot_MR = texture(tex_potential, uv + vec2( 1,  0)*pixel_size);
+    vec4 pot_BL = texture(tex_potential, uv + vec2(-1,  1)*pixel_size);
+    vec4 pot_BC = texture(tex_potential, uv + vec2( 0,  1)*pixel_size);
+    vec4 pot_BR = texture(tex_potential, uv + vec2( 1,  1)*pixel_size);
     
-    float gy = 0.0;
-    gy += -1.0 * texture(tex_potential, uv + vec2(-1, -1)*pixel_size).r;
-    gy += -2.0 * texture(tex_potential, uv + vec2( 0, -1)*pixel_size).r;
-    gy += -1.0 * texture(tex_potential, uv + vec2( 1, -1)*pixel_size).r;
-    gy +=  1.0 * texture(tex_potential, uv + vec2(-1,  1)*pixel_size).r;
-    gy +=  2.0 * texture(tex_potential, uv + vec2( 0,  1)*pixel_size).r;
-    gy +=  1.0 * texture(tex_potential, uv + vec2( 1,  1)*pixel_size).r;
+    // A. Combined Growth + Interaction Potential Gradient
+    // ARCHITECTURAL DECISION: Interaction is merged into growth potential
+    // so it's naturally balanced by alpha repulsion.
+    // combined = U_growth + interaction_beta * U_interact
+    float beta = p.u_interaction_beta;
+    float cp_TL = pot_TL.r + beta * pot_TL.b;
+    float cp_TC = pot_TC.r + beta * pot_TC.b;
+    float cp_TR = pot_TR.r + beta * pot_TR.b;
+    float cp_ML = pot_ML.r + beta * pot_ML.b;
+    float cp_MR = pot_MR.r + beta * pot_MR.b;
+    float cp_BL = pot_BL.r + beta * pot_BL.b;
+    float cp_BC = pot_BC.r + beta * pot_BC.b;
+    float cp_BR = pot_BR.r + beta * pot_BR.b;
     
+    // Sobel on combined potential
+    float gx = -1.0*cp_TL + -2.0*cp_ML + -1.0*cp_BL
+              + 1.0*cp_TR +  2.0*cp_MR +  1.0*cp_BR;
+    float gy = -1.0*cp_TL + -2.0*cp_TC + -1.0*cp_TR
+              + 1.0*cp_BL +  2.0*cp_BC +  1.0*cp_BR;
     vec2 gradGrowth = vec2(gx, gy);
     
-    // B. Density Potential Gradient (Repulsion from ALL species)
-    // Uses tex_potential.G = U_density from ALL-species convolution
-    float dx = 0.0;
-    dx += -1.0 * texture(tex_potential, uv + vec2(-1, -1)*pixel_size).g;
-    dx += -2.0 * texture(tex_potential, uv + vec2(-1,  0)*pixel_size).g;
-    dx += -1.0 * texture(tex_potential, uv + vec2(-1,  1)*pixel_size).g;
-    dx +=  1.0 * texture(tex_potential, uv + vec2( 1, -1)*pixel_size).g;
-    dx +=  2.0 * texture(tex_potential, uv + vec2( 1,  0)*pixel_size).g;
-    dx +=  1.0 * texture(tex_potential, uv + vec2( 1,  1)*pixel_size).g;
-    
-    float dy = 0.0;
-    dy += -1.0 * texture(tex_potential, uv + vec2(-1, -1)*pixel_size).g;
-    dy += -2.0 * texture(tex_potential, uv + vec2( 0, -1)*pixel_size).g;
-    dy += -1.0 * texture(tex_potential, uv + vec2( 1, -1)*pixel_size).g;
-    dy +=  1.0 * texture(tex_potential, uv + vec2(-1,  1)*pixel_size).g;
-    dy +=  2.0 * texture(tex_potential, uv + vec2( 0,  1)*pixel_size).g;
-    dy +=  1.0 * texture(tex_potential, uv + vec2( 1,  1)*pixel_size).g;
-    
+    // B. Density Gradient (reuse cached samples, G channel)
+    float dx = -1.0*pot_TL.g + -2.0*pot_ML.g + -1.0*pot_BL.g
+              + 1.0*pot_TR.g +  2.0*pot_MR.g +  1.0*pot_BR.g;
+    float dy = -1.0*pot_TL.g + -2.0*pot_TC.g + -1.0*pot_TR.g
+              + 1.0*pot_BL.g +  2.0*pot_BC.g +  1.0*pot_BR.g;
     vec2 gradDensity = vec2(dx, dy);
     
-    // C. Interaction Gradient (Attraction/Repulsion from other species)
-    // Uses tex_potential.B = U_interact from convolution
-    // Positive values = attraction, Negative = repulsion
-    float ix = 0.0;
-    ix += -1.0 * texture(tex_potential, uv + vec2(-1, -1)*pixel_size).b;
-    ix += -2.0 * texture(tex_potential, uv + vec2(-1,  0)*pixel_size).b;
-    ix += -1.0 * texture(tex_potential, uv + vec2(-1,  1)*pixel_size).b;
-    ix +=  1.0 * texture(tex_potential, uv + vec2( 1, -1)*pixel_size).b;
-    ix +=  2.0 * texture(tex_potential, uv + vec2( 1,  0)*pixel_size).b;
-    ix +=  1.0 * texture(tex_potential, uv + vec2( 1,  1)*pixel_size).b;
+    // C. Signal Gradient (Chemotaxis) — Sobel filtered
+    // Uses same hue interaction as convolution: cos(2π · circular_hue_distance)
+    // This makes gradSignal consistent with gradInteract's selectivity.
     
-    float iy = 0.0;
-    iy += -1.0 * texture(tex_potential, uv + vec2(-1, -1)*pixel_size).b;
-    iy += -2.0 * texture(tex_potential, uv + vec2( 0, -1)*pixel_size).b;
-    iy += -1.0 * texture(tex_potential, uv + vec2( 1, -1)*pixel_size).b;
-    iy +=  1.0 * texture(tex_potential, uv + vec2(-1,  1)*pixel_size).b;
-    iy +=  2.0 * texture(tex_potential, uv + vec2( 0,  1)*pixel_size).b;
-    iy +=  1.0 * texture(tex_potential, uv + vec2( 1,  1)*pixel_size).b;
+    // Helper: Convert signal RGB back to dominant hue and compute scalar potential
+    // For each neighbor: compute how much we "like" the signal at that location
+    // using the SAME function as get_interaction_strength in convolution
     
-    // gradInteract points toward positive interaction (attraction)
-    // We FOLLOW this gradient to move toward attraction, away from repulsion
-    vec2 gradInteract = vec2(ix, iy);
+    // Sample 3x3 neighborhood and compute scalar signal potential
+    float sp_TL = 0.0, sp_TC = 0.0, sp_TR = 0.0;
+    float sp_ML = 0.0, sp_MC = 0.0, sp_MR = 0.0;
+    float sp_BL = 0.0, sp_BC = 0.0, sp_BR = 0.0;
+    {
+        // We project signal RGB onto our detector RGB and use that as potential
+        // This is equivalent to cos-based hue matching when signals are pure hues
+        vec3 myDetector = HueToRGB(g_detection_hue);
+        
+        sp_TL = dot(texture(tex_signal, uv + vec2(-1, -1)*pixel_size).rgb, myDetector);
+        sp_TC = dot(texture(tex_signal, uv + vec2( 0, -1)*pixel_size).rgb, myDetector);
+        sp_TR = dot(texture(tex_signal, uv + vec2( 1, -1)*pixel_size).rgb, myDetector);
+        sp_ML = dot(texture(tex_signal, uv + vec2(-1,  0)*pixel_size).rgb, myDetector);
+        sp_MC = dot(texture(tex_signal, uv                           ).rgb, myDetector);
+        sp_MR = dot(texture(tex_signal, uv + vec2( 1,  0)*pixel_size).rgb, myDetector);
+        sp_BL = dot(texture(tex_signal, uv + vec2(-1,  1)*pixel_size).rgb, myDetector);
+        sp_BC = dot(texture(tex_signal, uv + vec2( 0,  1)*pixel_size).rgb, myDetector);
+        sp_BR = dot(texture(tex_signal, uv + vec2( 1,  1)*pixel_size).rgb, myDetector);
+    }
     
-    // APPLY AFFINITY (Cohesion toward kin growth potential)
-    gradGrowth *= (0.5 + g_affinity * 2.5);
+    // Sobel filter on scalar signal potential
+    float sgx = -1.0*sp_TL + -2.0*sp_ML + -1.0*sp_BL
+               + 1.0*sp_TR +  2.0*sp_MR +  1.0*sp_BR;
+    float sgy = -1.0*sp_TL + -2.0*sp_TC + -1.0*sp_TR
+               + 1.0*sp_BL +  2.0*sp_BC +  1.0*sp_BR;
     
-    // D. Signal Gradient (Chemotaxis)
-    // Canonical Implementation: Gradient of (Signal . dot . Preference)
-    // We want to move towards the signal that matches our detection hue.
-    
-    vec3 myDetector = HueToRGB(g_detection_hue);
-    
-    // Sample Neighbors (RGB Signals)
-    ivec2 l_uv = (uv_i + ivec2(-1, 0) + ivec2(p.u_res)) % ivec2(p.u_res);
-    ivec2 r_uv = (uv_i + ivec2(1, 0) + ivec2(p.u_res)) % ivec2(p.u_res);
-    ivec2 u_uv = (uv_i + ivec2(0, -1) + ivec2(p.u_res)) % ivec2(p.u_res);
-    ivec2 d_uv = (uv_i + ivec2(0, 1) + ivec2(p.u_res)) % ivec2(p.u_res);
-    
-    vec3 sigL = texelFetch(tex_signal, l_uv, 0).rgb;
-    vec3 sigR = texelFetch(tex_signal, r_uv, 0).rgb;
-    vec3 sigU = texelFetch(tex_signal, u_uv, 0).rgb;
-    vec3 sigD = texelFetch(tex_signal, d_uv, 0).rgb;
-    
-    // Convert to Scalar Potential (How much I like it)
-    float pL = dot(sigL, myDetector);
-    float pR = dot(sigR, myDetector);
-    float pU = dot(sigU, myDetector);
-    float pD = dot(sigD, myDetector);
-    
-    // Compute Gradient (Central Difference)
-    vec2 gradSignal = vec2(pR - pL, pD - pU);
+    vec2 gradSignal = vec2(sgx, sgy);
     
     // === TOTAL ATTRACTION ===
-    // gradGrowth: Move toward kin (growth potential)
-    // gradSignal: Move toward preferred signals
-    // gradInteract: Move toward attraction / away from repulsion (NEW!)
-    
-    // E. Local Density Pressure (Total mass crowding)
-    // This is the classic Lenia repulsion but perceived across ALL species.
-    // We use gradDensity (from convolution) for long-range and gradLocalDensity for short-range.
-    float mR = texelFetch(tex_state, r_uv, 0).r;
-    float mL = texelFetch(tex_state, l_uv, 0).r;
-    float mD = texelFetch(tex_state, d_uv, 0).r;
-    float mU = texelFetch(tex_state, u_uv, 0).r;
-    vec2 gradLocalDensity = vec2(mR - mL, mD - mU);
-    
-    // F. Compute Velocity Field
-    vec2 shape_c_inertia = unpack2(g1.a);
-    float g_inertia = shape_c_inertia.y;
+    // gradGrowth: includes growth + interaction potential (merged, alpha-balanced)
+    // gradSignal: long-range chemotaxis toward preferred signals
 
-    // === UNIVERSAL CROWDING (ALPHA) ===
-    // Canonical Flow Lenia: Alpha should depend on total local density (U_density)
-    // If ANY species are crowding this area, I should feel pressed to move/diffuse.
-    float U_total_density = texture(tex_potential, uv).g;
     
-    float local_theta = p.u_theta_A * (0.5 + g_density_tol * 2.0);
-    // Use the maximum of my own mass and the neighborhood density to feel pressure
-    float effective_density = max(myMass, U_total_density);
-    float alpha_raw = pow(effective_density / max(local_theta, 0.001), p.u_alpha_n);
+    // === CANONICAL ALPHA ===
+    // Reference: alpha = clip((A/2)², 0, 1)
+    // When mass is low → alpha ≈ 0 → creature follows growth gradient (exploration)
+    // When mass is high → alpha ≈ 1 → creature pushed away by density gradient (pressure)
+    float alpha = clamp((myMass / 2.0) * (myMass / 2.0), 0.0, 1.0);
     
-    // SAFETY 1: Clamp Alpha strictly to [0,1]
-    float alpha = clamp(alpha_raw, 0.0, 1.0);
-    
-    // === FINAL FORCE CALCULATION (TARGET VELOCITY) ===
-    // F = (1 - alpha) * grad(U) - alpha * grad(A)
-    
-    // Genetic Barrier (Inmiscibility):
-    // If barrier is high, add a force that pushes away from different species 
-    // based on gradDensity (total) vs gradLocalDensity (self).
-    vec2 gradOtherSpecies = gradDensity - gradLocalDensity;
-    vec2 barrierForce = gradOtherSpecies * p.u_genetic_barrier * 5.0;
-    
-    // Interaction Force:
-    // Scale gradInteract by the global u_interaction_beta for UI control
-    vec2 interactionForce = gradInteract * p.u_interaction_beta * (0.5 + g_repulsion * 2.5);
-
+    // === CANONICAL FORCE: F = (1-α)·∇U - α·∇A ===
     vec2 totalAttraction = gradGrowth 
-                         + gradSignal * (g_sensitivity * p.u_signal_force_strength)
-                         + interactionForce;
+                         + gradSignal * (g_sensitivity * p.u_signal_force_strength);
     
-    vec2 totalRepulsion = gradLocalDensity + barrierForce;
+    // CANONICAL REPULSION: Sobel-filtered total density field (diffuse, medium-range)
+    vec2 totalRepulsion = gradDensity;
     
-    // Smooth interpolation between attraction and repulsion
     vec2 flow_field = (1.0 - alpha) * totalAttraction - alpha * totalRepulsion;
     
     float force_mult = p.u_flow_speed * (0.2 + g_mobility * 1.8);

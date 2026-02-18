@@ -256,14 +256,11 @@ void main() {
     
     int loopR = int(ceil(R_actual));
     
-    // === TRI-POTENTIAL SYSTEM ===
-    // sumKin: Mass from SAME species (for growth physics)
-    // sumAll: Mass from ALL species (for density awareness / crowding)
+    // === CANONICAL POTENTIAL SYSTEM ===
+    // sumAll: Mass from ALL species (for growth + density physics)
     // sumInteract: Weighted interaction potential (attraction/repulsion)
-    float sumKin = 0.0;
     float sumAll = 0.0;
     float sumInteract = 0.0;  
-    float weightKin = 0.0;
     float weightAll = 0.0;
     float weightInteract = 0.0;
     
@@ -287,24 +284,15 @@ void main() {
             float w = eval_kernel(dist, R_actual, kp);
            
             if (w > 0.0001 && neighborMass >= p.u_colonize_thr) {
-                // Circular distance in hue space [0, 0.5]
-                float genetic_dist = abs(my_emission_hue - neighborHue);
-                if (genetic_dist > 0.5) genetic_dist = 1.0 - genetic_dist;
-                
-                // 1. Growth Potential (Kin Recognition)
-                // We use a strict threshold for "kin" - very close in genetic space
-                if (genetic_dist < 0.05) {
-                    sumKin += neighborMass * w;
-                    weightKin += w;
-                }
-                
-                // 2. Total Density Potential (Perception Universal)
-                // Fundamental for crowding/diffusion physics
+                // 1. Total Mass Potential (for growth + density)
+                // CANONICAL: Growth uses ALL mass. The growth function G(U)
+                // naturally discriminates via per-species mu/sigma.
                 sumAll += neighborMass * w;
                 weightAll += w;
                 
-                // 3. Interaction Potential (Attraction/Repulsion based on Detection Gene)
-                // This is the active "will" of the creature
+                // 2. Interaction Potential (Attraction/Repulsion based on Detection Gene)
+                float genetic_dist = abs(my_emission_hue - neighborHue);
+                if (genetic_dist > 0.5) genetic_dist = 1.0 - genetic_dist;
                 float strength = get_interaction_strength(g_detection_hue, neighborHue);
                 sumInteract += neighborMass * w * strength;
                 weightInteract += w;
@@ -312,17 +300,19 @@ void main() {
         }
     }
 
-    // === GROWTH POTENTIAL (Kin-based) ===
-    float U_kin = (weightKin > 0.0) ? sumKin / weightKin : 0.0;
+    // === DENSITY (All species) ===
+    float U_density = (weightAll > 0.0) ? sumAll / weightAll : 0.0;
+    
+    // === GROWTH POTENTIAL (Canonical: based on ALL mass) ===
+    // G(U) = 2·exp(-((U-μ)/σ)²/2) - 1
+    // The growth function naturally returns:
+    //   +1 when density matches μ (ideal conditions)
+    //   -1 when density is far from μ (overcrowded or empty)
     float mu = g_mu; 
     float sigma = 0.001 + g_sigma * 0.2;
-    float diff = (U_kin - mu);
+    float diff = (U_density - mu);
     float exp_term = exp(-0.5 * (diff * diff) / max(sigma * sigma, 0.0001));
-    float U_growth = 2.0 * exp_term - 1.0; 
-    
-    // === DENSITY POTENTIAL (All species) ===
-    // Represents total crowding in the area.
-    float U_density = (weightAll > 0.0) ? sumAll / weightAll : 0.0;
+    float U_growth = 2.0 * exp_term - 1.0;
     
     // === INTERACTION POTENTIAL (Attraction/Repulsion field) ===
     // Positive = attraction, Negative = repulsion

@@ -15,10 +15,10 @@ const G_VISCOSITY = 3
 const G_SHAPE_A = 4
 const G_SHAPE_B = 5
 const G_SHAPE_C = 6
-const G_INERTIA = 7
-const G_AFFINITY = 8
-const G_REPULSION = 9
-const G_DENSITY_TOL = 10
+const G_INERTIA = 7      # [DEPRECATED] kept for index alignment
+const G_AFFINITY = 8     # [DEPRECATED] kept for index alignment
+const G_REPULSION = 9    # Hollow Core (kernel shape)
+const G_DENSITY_TOL = 10 # [DEPRECATED] kept for index alignment
 const G_MOBILITY = 11
 const G_SECRETION = 12
 const G_SENSITIVITY = 13
@@ -93,7 +93,6 @@ class Species:
 		var mu = genes["mu"]
 		var rad = genes["radius"]
 		var mob = genes["mobility"]
-		var aff = genes["affinity"]
 		
 		# 1. Physiology (Mu) -> Noun
 		var noun = "Proto"
@@ -108,12 +107,10 @@ class Species:
 		if rad < 0.3: size_adj = "Micro "
 		elif rad > 0.7: size_adj = "Mega "
 		
-		# 3. Behavior (Mobility/Affinity) -> Adjective 2
+		# 3. Behavior (Mobility / Hollow Core) -> Adjective 2
 		var beh_adj = ""
 		if mob > 0.7: beh_adj = "Velox" # Fast
 		elif mob < 0.3: beh_adj = "Pigra" # Slow
-		elif aff > 0.7: beh_adj = "Socialis" # Social
-		elif aff < 0.3: beh_adj = "Solus" # Loner
 		else: beh_adj = "Vagus" # Wandering
 		
 		name = size_adj + noun + " " + beh_adj
@@ -127,7 +124,7 @@ static func get_fast_dist(g1: PackedFloat32Array, g2: PackedFloat32Array) -> flo
 	d += abs(g1[G_RADIUS] - g2[G_RADIUS]) * 1.0 # radius
 	d += abs(g1[G_VISCOSITY] - g2[G_VISCOSITY]) * 0.5 # viscosity
 	d += abs(g1[G_SHAPE_A] - g2[G_SHAPE_A]) * 0.8 # shape_a
-	d += abs(g1[G_AFFINITY] - g2[G_AFFINITY]) * 0.5 # affinity
+	d += abs(g1[G_REPULSION] - g2[G_REPULSION]) * 0.5 # hollow core
 	d += abs(g1[G_MOBILITY] - g2[G_MOBILITY]) * 1.0 # mobility
 	
 	# Emission Hue (Critical for speciation)
@@ -147,7 +144,7 @@ static func get_gene_distance(g1: Dictionary, g2: Dictionary) -> float:
 	d += abs(g1["radius"] - g2["radius"]) * 1.0
 	d += abs(g1.get("viscosity",0.0) - g2.get("viscosity",0.0)) * 0.5
 	d += abs(g1.get("shape_a",0.0) - g2.get("shape_a",0.0)) * 0.8
-	d += abs(g1.get("affinity",0.0) - g2.get("affinity",0.0)) * 0.5
+	d += abs(g1.get("repulsion",0.0) - g2.get("repulsion",0.0)) * 0.5
 	d += abs(g1.get("mobility",0.0) - g2.get("mobility",0.0)) * 1.0
 	var h1 = g1["emission_hue"]
 	var h2 = g2["emission_hue"]

@@ -4,9 +4,9 @@ var gene_names = [
 	# Physiology
 	"Archetype", "Stability", "Radius", "Viscosity",
 	# Morphology
-	"Shape A", "Shape B", "Shape C", "Inertia",
+	"Shape A", "Shape B", "Shape C", "~Inertia",
 	# Behavior
-	"Affinity", "Repulsion", "DensityTol", "Mobility",
+	"~Affinity", "Hollow Core", "~DensTol", "Mobility",
 	# Senses
 	"Secretion", "Sensitivity", "Emit Hue", "Detect Hue"
 ]
@@ -15,9 +15,9 @@ var gene_colors = [
 	# Phy (Reds/Greens)
 	Color(1.0, 0.4, 0.4), Color(0.4, 1.0, 0.4), Color(0.4, 0.4, 1.0), Color(0.6, 0.6, 0.6),
 	# Mor (Purples/Cyans)
-	Color(0.8, 0.2, 0.8), Color(0.6, 0.2, 0.6), Color(0.4, 0.2, 0.4), Color(0.2, 1.0, 0.2),
-	# Beh (Oranges/Yellows)
-	Color(1.0, 0.5, 0.0), Color(1.0, 0.2, 0.0), Color(1.0, 1.0, 0.2), Color(0.0, 1.0, 1.0),
+	Color(0.8, 0.2, 0.8), Color(0.6, 0.2, 0.6), Color(0.4, 0.2, 0.4), Color(0.3, 0.3, 0.3),
+	# Beh (Oranges/Yellows) - deprecated genes dimmed
+	Color(0.3, 0.3, 0.3), Color(1.0, 0.5, 0.0), Color(0.3, 0.3, 0.3), Color(0.0, 1.0, 1.0),
 	# Sen (Special)
 	Color(1.0, 0.0, 1.0), Color(0.0, 1.0, 0.5), Color(1.0, 1.0, 1.0), Color(0.5, 0.5, 0.5)
 ]

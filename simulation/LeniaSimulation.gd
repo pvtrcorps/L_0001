@@ -24,16 +24,16 @@ var params = {
 	"colonize_thr": 0.001, # [DUST THRESOLHD] Mass below this loses identity
 	
 	# Advanced Physics (Flow Lenia style)
-	"temperature": 0.8,   # Advection diffusion (s). Paper default: 0.65
-	"theta_A": 1.0,        # Global Density Multiplier. (Lowered to trigger repulsion earlier)
-	"alpha_n": 4.0,        # Repulsion Sharpness. Canonical 2.0
+	"temperature": 0.65,   # Advection diffusion (s). Paper default: 0.65
+	"theta_A": 1.0,        # [DEPRECATED] UBO padding - not read by shaders
+	"alpha_n": 4.0,        # [DEPRECATED] UBO padding - not read by shaders
 	
 	# Signal Layer
 	"signal_diff": 2.0,    # Diffusion Rate
 	"signal_decay": 0.0,   # Decay Rate
 	"signal_advect": 1.0,  # Signal advection weight [0-1]
 	"flow_speed": 1.0,     # [CANONICAL: 1.0]. Multiplier for advection force
-	"fluid_momentum": 0.5, # [CANONICAL: 0.0]. Aristotelian Physics (No Inertia)
+	"fluid_momentum": 0.0, # [CANONICAL: 0.0]. Aristotelian Physics (No Inertia)
 	
 	"beta_selection": 1.0, # Selection pressure for negotiation rule
 	
@@ -45,8 +45,8 @@ var params = {
 	# Signal Advanced
 	"signal_force_strength": 20.0,   # Multiplier for signal gradient force
 	"signal_emission_strength": 1.0, # Multiplier for signal secretion quantity
-	"interaction_beta": 0.0,         # [CANONICAL: 0.0] No extra interaction
-	"genetic_barrier": 0.0,          # [CANONICAL: 0.0] Permeable
+	"interaction_beta": 0.0,         # Hue-based inter-species force. 0=off
+	"genetic_barrier": 0.0,          # [DEPRECATED] UBO padding - not read by shaders
 	
 	# === GENE RANGES (16 GENES x 2 MIN/MAX) ===
 	# BLOCK A: Physiology (Body)
@@ -59,12 +59,12 @@ var params = {
 	"g_shape_a_min": 0.0, "g_shape_a_max": 1.0, # 5. Ring Balance
 	"g_shape_b_min": 0.0, "g_shape_b_max": 1.0, # 6. Complexity
 	"g_shape_c_min": 0.0, "g_shape_c_max": 1.0, # 7. Ring Spacing
-	"g_inertia_min": 0.0, "g_inertia_max": 1.0, # 8. Inertial Mass
+	"g_inertia_min": 0.0, "g_inertia_max": 1.0, # 8. [DEPRECATED] UBO padding
 	
 	# BLOCK C: Social & Motor (Mind)
-	"g_affinity_min": 0.2, "g_affinity_max": 1.0, # 9. Cohesion (Defaulting slightly higher)
-	"g_repulsion_min": 0.3, "g_repulsion_max": 0.8, # 10. Spacing (Incentivize structure)
-	"g_density_tol_min": 0.0, "g_density_tol_max": 1.0, # 11. Overcrowding Tol
+	"g_affinity_min": 0.2, "g_affinity_max": 1.0, # 9. [DEPRECATED] UBO padding
+	"g_repulsion_min": 0.3, "g_repulsion_max": 0.8, # 10. Hollow Core (Kernel shape)
+	"g_density_tol_min": 0.0, "g_density_tol_max": 1.0, # 11. [DEPRECATED] UBO padding
 	"g_mobility_min": 0.0, "g_mobility_max": 1.0, # 12. Speed Base
 	
 	# BLOCK D: Communication (Senses)
@@ -1072,7 +1072,7 @@ func set_highlight_genes(genes: Dictionary, active: bool):
 	if display_material:
 		display_material.set_shader_parameter("u_show_select", active)
 		if active and genes.has("mu"):
-			var v = Vector4(genes["mu"], genes["sigma"], genes["radius"], genes["affinity"])
+			var v = Vector4(genes["mu"], genes["sigma"], genes["radius"], genes["repulsion"])
 			display_material.set_shader_parameter("u_select_vector", v)
 
 func get_species_info_at(uv: Vector2) -> Dictionary:

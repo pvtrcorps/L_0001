@@ -23,12 +23,9 @@ var ui_schema = {
 		["R", "Kernel Base Radius (R)", 8.0, 16.0, 1.0]
 	],
 	"Flow Physics": [
-		["temperature", "Temperature (s)", 0.0, 3.0, 0.05], # Advection diffusion (s). Paper default: 0.65
-		["theta_A", "Global Density Mult", 0.1, 10.0, 0.1], # Global Density Multiplier. Canonical 1.0
-		["alpha_n", "Repulsion Sharpness (n)", 0.0, 4.0, 0.1], # Repulsion Sharpness. Canonical 2.0
+		["temperature", "Temperature (s)", 0.0, 3.0, 0.05],
 		["beta_selection", "Selection Pressure (β)", 0.0, 3.0, 0.1],
 		["interaction_beta", "Kernel Interaction (β)", 0.0, 10.0, 0.1],
-		["genetic_barrier", "Genetic Barrier (Inmiscibility)", 0.0, 1.0, 0.05],
 		["flow_speed", "Flow Speed", 0.0, 10.0, 0.5],
 		["fluid_momentum", "Fluid Inertia", 0.0, 1.0, 0.05]
 	],
@@ -52,10 +49,7 @@ var ui_schema = {
 		["g_shape_a", "Shape A (Ring Balance)", 0.0, 1.0, 0.05],
 		["g_shape_b", "Shape B (Complexity)", 0.0, 1.0, 0.05],
 		["g_shape_c", "Shape C (Ring Spacing)", 0.0, 1.0, 0.05],
-		["g_inertia", "Inertia", 0.0, 1.0, 0.05],
-		["g_affinity", "Cohesion (Affinity)", 0.0, 1.0, 0.05],
-		["g_repulsion", "Repulsion", 0.0, 1.0, 0.05],
-		["g_density_tol", "Density Tolerance", 0.0, 1.0, 0.05],
+		["g_repulsion", "Hollow Core (Kernel)", 0.0, 1.0, 0.05],
 		["g_mobility", "Mobility", 0.0, 1.0, 0.05],
 		["g_secretion", "Secretion", 0.0, 1.0, 0.05],
 		["g_sensitivity", "Sensitivity", 0.0, 1.0, 0.05],
@@ -122,10 +116,9 @@ func _build_ui():
 		"init_clusters": "Number of random initialization clusters placed on the grid.",
 		"R": "Kernel Radius. The size of the sensing neighborhood for each cell.",
 		"temperature": "Physics temperature. Controls the rate of diffusion/advection in the flow simulation.",
-		"theta_A": "Critical Mass (Alpha). The density threshold where repulsion forces begin to dominate.",
-		"alpha_n": "Repulsion Sharpness. Controls how abruptly the repulsion force kicks in.",
 		"flow_speed": "Advection Strength Multiplier. Increases flow force without changing time step (dt).",
 		"fluid_momentum": "Fluid Momentum/Inertia. 1.0 = Fluid Motion, 0.0 = Direct Movement (Easier to see forces).",
+		"interaction_beta": "Inter-species Interaction Force. Hue-based attraction/repulsion between species. 0=off.",
 		"signal_diff": "Diffusion Rate. How fast the chemical signal spreads to neighboring cells.",
 		"signal_decay": "Decay Rate. How fast the chemical signal dissipates over time.",
 		"signal_advect": "Advection Weight. How much the chemical signal is dragged by the mass flow.",
@@ -141,10 +134,7 @@ func _build_ui():
 		"g_shape_a": "Shape A. Controls ring balance in kernel shape.",
 		"g_shape_b": "Shape B. Controls pattern complexity.",
 		"g_shape_c": "Shape C. Controls ring spacing.",
-		"g_inertia": "Inertia. Resistance to directional changes.",
-		"g_affinity": "Cohesion (Affinity). Attraction strength to own species.",
-		"g_repulsion": "Repulsion. Separation force against overcrowding.",
-		"g_density_tol": "Density Tolerance (Lambda). Width of the growth function.",
+		"g_repulsion": "Hollow Core. Makes inner kernel rings negative, creating donut-shaped sensing.",
 		"g_mobility": "Mobility (Flow). How fast the creature can move/flow.",
 		"g_secretion": "Secretion. Amount of chemical signal produced.",
 		"g_sensitivity": "Sensitivity. Response to the chemical signal.",
@@ -368,11 +358,9 @@ func _on_species_hovered(info):
 			
 			txt += "[Morphology]\n"
 			txt += "  Shape A/B/C: %.2f / %.2f / %.2f\n" % [info.get("shape_a", 0.0), info.get("shape_b", 0.0), info.get("shape_c", 0.0)]
-			txt += "  Inertia: %.2f\n" % info.get("inertia", 0.0)
 			
 			txt += "[Behavior]\n"
-			txt += "  Aff: %.2f | Rep: %.2f\n" % [info.get("affinity", 0.0), info.get("repulsion", 0.0)]
-			txt += "  Mob: %.2f | Tol: %.2f\n" % [info.get("mobility", 0.0), info.get("density_tol", 0.0)]
+			txt += "  Hollow: %.2f | Mob: %.2f\n" % [info.get("repulsion", 0.0), info.get("mobility", 0.0)]
 			
 			txt += "[Senses]\n"
 			txt += "  Sec: %.2f | Sens: %.2f\n" % [info.get("secretion", 0.0), info.get("sensitivity", 0.0)]

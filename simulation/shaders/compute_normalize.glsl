@@ -168,16 +168,22 @@ void main() {
     // 5. Final Mass, Emission & Consumption
     float finalMass = mass;
     
-    // CONTINUOUS CONSUMPTION/SECRETION
-    // Removed 0.05 threshold to prevent "Digital Gating" artifacts.
-    // Reaction occurs even for trace amounts of mass, ensuring smooth gradients.
+    // SELECTIVE CONSUMPTION/SECRETION
+    // Creatures only consume signal matching their detection_hue preference
     if (finalMass > 0.0001) {
         vec3 emittedColor = HueToRGB(g_emission_hue);
+        
+        // Unpack detection_hue from genome_ext A channel (same pack as emission)
+        float g_detection_hue = hues.y;
+        vec3 detectorColor = HueToRGB(g_detection_hue);
+        
         vec4 currentSignal = imageLoad(img_new_signal, uv_i); 
         
-        // A. Consumption (Grazing)
-        // Creatures consume signal proportional to their mass * dt
-        vec3 consumed = currentSignal.rgb * (finalMass * 0.5 * p.u_dt);
+        // A. Selective Consumption (Grazing)
+        // Only consume signal components that match our detection preference
+        // dot(signal, detector) measures how much of the signal we can "sense"
+        float match = max(0.0, dot(normalize(currentSignal.rgb + vec3(0.0001)), detectorColor));
+        vec3 consumed = currentSignal.rgb * (match * finalMass * 0.5 * p.u_dt);
         vec3 signalAfterConsumption = currentSignal.rgb - consumed;
         
         // B. Secretion (Emission)

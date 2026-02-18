@@ -48,16 +48,16 @@ extends Resource
 @export var g_shape_b_max: float = 1.0
 @export var g_shape_c_min: float = 0.0
 @export var g_shape_c_max: float = 1.0
-@export var g_inertia_min: float = 0.0  # [DEPRECATED]
-@export var g_inertia_max: float = 1.0  # [DEPRECATED]
+@export var g_inertia_min: float = 0.0  # Morphological anisotropy
+@export var g_inertia_max: float = 1.0
 
 @export_group("Genetics: Social & Motor")
-@export var g_affinity_min: float = 0.0  # [DEPRECATED]
-@export var g_affinity_max: float = 1.0  # [DEPRECATED]
+@export var g_affinity_min: float = 0.0  # Compactness (body cohesion)
+@export var g_affinity_max: float = 1.0
 @export var g_repulsion_min: float = 0.0 # Hollow Core (kernel shape)
 @export var g_repulsion_max: float = 1.0 # Hollow Core (kernel shape)
-@export var g_density_tol_min: float = 0.0 # [DEPRECATED]
-@export var g_density_tol_max: float = 1.0 # [DEPRECATED]
+@export var g_density_tol_min: float = 0.0 # Morphological plasticity
+@export var g_density_tol_max: float = 1.0
 @export var g_mobility_min: float = 0.0
 @export var g_mobility_max: float = 1.0
 

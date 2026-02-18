@@ -9,8 +9,8 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_dt;
     float u_seed;
     float u_R;
-    float u_theta_A; 
-    float u_alpha_n; 
+    float u_theta_A;
+    float u_alpha_n;
     float u_temperature;
     float u_signal_advect;
     float u_beta;
@@ -20,7 +20,7 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_init_clusters;
     float u_init_density;
     float u_colonize_thr;
-    
+
     // 1. Gene Ranges (16 Genes * 2) = 32 floats
     // Block A: Physiology
     vec2 r_mu; vec2 r_sigma; vec2 r_radius; vec2 r_viscosity;
@@ -30,7 +30,7 @@ layout(set = 0, binding = 0, std430) buffer Params {
     vec2 r_affinity; vec2 r_repulsion; vec2 r_density_tol; vec2 r_mobility;
     // Block D: Senses
     vec2 r_secretion; vec2 r_sensitivity; vec2 r_emission_hue; vec2 r_detection_hue;
-    
+
     // Wind / Atmosphere
     float u_time;
     float u_wind_scale;
@@ -40,7 +40,7 @@ layout(set = 0, binding = 0, std430) buffer Params {
 
 layout(set = 0, binding = 1, rgba32f) uniform image2D img_state;
 layout(set = 0, binding = 2, rgba32f) uniform image2D img_genome;
-layout(set = 0, binding = 3, rgba32f) uniform image2D img_genome_ext; // [NEW]
+layout(set = 0, binding = 3, rgba32f) uniform image2D img_genome_ext;
 
 float hash(vec2 pt) {
     return fract(sin(dot(pt, vec2(12.9898, 78.233))) * 43758.5453);
@@ -55,21 +55,20 @@ float pack2(float a, float b) {
 void main() {
     ivec2 uv_i = ivec2(gl_GlobalInvocationID.xy);
     if (uv_i.x >= int(p.u_res.x) || uv_i.y >= int(p.u_res.y)) return;
-    
+
     vec2 uv = (vec2(uv_i) + 0.5) / p.u_res;
-    
+
     // 1. Density Initialization
     float density = 0.0;
     float cell_x = floor(uv.x * p.u_init_clusters);
     float cell_y = floor(uv.y * p.u_init_clusters);
     float cell_hash = hash(vec2(cell_x, cell_y) + p.u_seed);
-    
+
     if (cell_hash < p.u_init_density) {
         vec2 cell_center = (vec2(cell_x, cell_y) + 0.5) / p.u_init_clusters;
         float d = length(uv - cell_center) * p.u_init_clusters;
         density = smoothstep(0.30001, 0.3, d);
     }
-    
 
     if (density < 0.0001) {
         imageStore(img_state, uv_i, vec4(0.0));
@@ -80,60 +79,52 @@ void main() {
 
     // 2. Gene Generation (Species Seed)
     vec2 species_seed = vec2(cell_x, cell_y) + p.u_seed;
-    
-    // Helper to generate and map a gene
-    // Uses seed + offset to get hash [0,1], then mixes with range
+
     #define GEN_GENE(offset, range_vec) mix(range_vec.x, range_vec.y, hash(species_seed + offset))
-    
-    // -- BLOCK A: Physiology --
+
+    // Block A: Physiology
     float g_mu = GEN_GENE(1.0, p.r_mu);
     float g_sigma = GEN_GENE(2.0, p.r_sigma);
     float g_radius = GEN_GENE(3.0, p.r_radius);
     float g_viscosity = GEN_GENE(4.0, p.r_viscosity);
-    
-    // -- BLOCK B: Morphology --
+
+    // Block B: Morphology
     float g_shape_a = GEN_GENE(5.0, p.r_shape_a);
     float g_shape_b = GEN_GENE(6.0, p.r_shape_b);
     float g_shape_c = GEN_GENE(7.0, p.r_shape_c);
-    float g_inertia = GEN_GENE(8.0, p.r_inertia);
-    
-    // -- BLOCK C: Social / Motor --
-    float g_affinity = GEN_GENE(9.0, p.r_affinity);
+    float g_anisotropy = GEN_GENE(8.0, p.r_inertia);     // repurposed inertia gene
+
+    // Block C: Body Plan / Social / Motor
+    float g_compactness = GEN_GENE(9.0, p.r_affinity);   // repurposed affinity gene
     float g_repulsion = GEN_GENE(10.0, p.r_repulsion);
-    float g_density_tol = GEN_GENE(11.0, p.r_density_tol);
+    float g_plasticity = GEN_GENE(11.0, p.r_density_tol);// repurposed density_tol gene
     float g_mobility = GEN_GENE(12.0, p.r_mobility);
-    
-    // -- BLOCK D: Senses --
+
+    // Block D: Senses
     float g_secretion = GEN_GENE(13.0, p.r_secretion);
     float g_sensitivity = GEN_GENE(14.0, p.r_sensitivity);
     float g_emission_hue = GEN_GENE(15.0, p.r_emission_hue);
     float g_detection_hue = GEN_GENE(16.0, p.r_detection_hue);
-    
+
     // 3. Packing
-    // Genome 1 (Physiology & Morphology)
     vec4 packed_1 = vec4(
-        pack2(g_mu, g_sigma),           // R: Metabolism
-        pack2(g_radius, g_viscosity),   // G: Body Props
-        pack2(g_shape_a, g_shape_b),    // B: Shape 1
-        pack2(g_shape_c, g_inertia)     // A: Shape 2 / Inertia
+        pack2(g_mu, g_sigma),
+        pack2(g_radius, g_viscosity),
+        pack2(g_shape_a, g_shape_b),
+        pack2(g_shape_c, g_anisotropy)
     );
-    
-    // Genome 2 (Behavior & Senses)
+
     vec4 packed_2 = vec4(
-        pack2(g_affinity, g_repulsion),         // R: Social
-        pack2(g_density_tol, g_mobility),       // G: Tolerance/Speed
-        pack2(g_secretion, g_sensitivity),      // B: Signal Volume/Gain
-        pack2(g_emission_hue, g_detection_hue)  // A: Signal Channels
+        pack2(g_compactness, g_repulsion),
+        pack2(g_plasticity, g_mobility),
+        pack2(g_secretion, g_sensitivity),
+        pack2(g_emission_hue, g_detection_hue)
     );
-    
-    // Spectral genes are now fully integrated into Genome Ext (Channel A)
-    // We no longer need to pack them into state.a, but we might keep them there
-    // for easy visualization if needed. OR we can use the "Growth Rate" slot in state.a?
-    // Let's keep state.a free or use it for "Age" or "Energy".
-    // For now, let's keep it 0.0 or duplicate spectral for backwards compat if needed.
-    // Actually, Lenia often uses state.a for "potential" or debug.
-    
-    imageStore(img_state, uv_i, vec4(density, 0.0, 0.0, 0.0));
+
+    // state.a stores local morphology polarity angle in [0, 1).
+    float polarity = hash(species_seed + 17.0);
+
+    imageStore(img_state, uv_i, vec4(density, 0.0, 0.0, polarity));
     imageStore(img_genome, uv_i, packed_1);
     imageStore(img_genome_ext, uv_i, packed_2);
 }

@@ -46,7 +46,9 @@ var params = {
 	"signal_force_strength": 1.0,   # Multiplier for signal gradient force
 	"signal_emission_strength": 1.0, # Multiplier for signal secretion quantity
 	"interaction_beta": 1.0,         # Hue-based inter-species force. 0=off
-	"genetic_barrier": 0.0,          # [DEPRECATED] UBO padding - not read by shaders
+	"morph_anisotropy_gain": 1.0,    # Global gain for anisotropic morphology effects
+	"morph_polarity_gain": 1.0,      # Global gain for internal polarity persistence/steering
+	"morph_plasticity_gain": 1.0,    # Global gain for context-driven plasticity
 	
 	# === GENE RANGES (16 GENES x 2 MIN/MAX) ===
 	# BLOCK A: Physiology (Body)
@@ -59,12 +61,12 @@ var params = {
 	"g_shape_a_min": 0.0, "g_shape_a_max": 1.0, # 5. Ring Balance
 	"g_shape_b_min": 0.0, "g_shape_b_max": 1.0, # 6. Complexity
 	"g_shape_c_min": 0.0, "g_shape_c_max": 1.0, # 7. Ring Spacing
-	"g_inertia_min": 0.0, "g_inertia_max": 1.0, # 8. [DEPRECATED] UBO padding
+	"g_inertia_min": 0.0, "g_inertia_max": 1.0, # 8. Morphological anisotropy
 	
 	# BLOCK C: Social & Motor (Mind)
-	"g_affinity_min": 0.0, "g_affinity_max": 1.0, # 9. [DEPRECATED] UBO padding
+	"g_affinity_min": 0.0, "g_affinity_max": 1.0, # 9. Compactness (body cohesion)
 	"g_repulsion_min": 0.0, "g_repulsion_max": 1.0, # 10. Hollow Core (Kernel shape)
-	"g_density_tol_min": 0.0, "g_density_tol_max": 1.0, # 11. [DEPRECATED] UBO padding
+	"g_density_tol_min": 0.0, "g_density_tol_max": 1.0, # 11. Morphological plasticity
 	"g_mobility_min": 0.0, "g_mobility_max": 1.0, # 12. Speed Base
 	
 	# BLOCK D: Communication (Senses)
@@ -300,11 +302,11 @@ func _update_ubo():
 		# Chunk 4 (Wind/Atmosphere) - Appended to end
 		params_time, params["wind_scale"], params["wind_strength"], params["wind_speed"],
 		
-		# Chunk 5 (Signal Extras) - [NEW]
-		params["signal_force_strength"], params["signal_emission_strength"], params["interaction_beta"], params["genetic_barrier"],
+		# Chunk 5 (Signal + Morph Extras)
+		params["signal_force_strength"], params["signal_emission_strength"], params["interaction_beta"], params["morph_anisotropy_gain"],
 		
-		# Chunk 6 (Cleanup)
-		params["colonize_thr"], 0.0, 0.0, 0.0
+		# Chunk 6 (Morph Controls + Cleanup)
+		params["colonize_thr"], params["morph_polarity_gain"], params["morph_plasticity_gain"], 0.0
 	])
 	
 	var bytes = buffer.to_byte_array()
@@ -1100,15 +1102,16 @@ func get_species_info_at(uv: Vector2) -> Dictionary:
 		"shape_a": floats[base+5],
 		"shape_b": floats[base+6],
 		"shape_c": floats[base+7],
-		"growth_rate": floats[base+8],
-		"affinity": floats[base+9],
+		"anisotropy": floats[base+8],
+		"compactness": floats[base+9],
 		"repulsion": floats[base+10],
-		"density_tol": floats[base+11],
+		"plasticity": floats[base+11],
 		"mobility": floats[base+12],
 		"secretion": floats[base+13],
 		"sensitivity": floats[base+14],
 		"emission_hue": floats[base+15],
 		"detection_hue": floats[base+16],
+		"polarity": floats[base+17],
 		"mass": m
 	}
 	

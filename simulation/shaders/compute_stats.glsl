@@ -65,26 +65,30 @@ void main() {
     if (mass > 0.001) {
         atomicAdd(s.total_mass, uint(mass * 1000.0));
         atomicAdd(s.population, 1);
-        
+
         vec4 g1 = texture(tex_genome, uv);
         vec4 g2 = texture(tex_genome_ext, uv);
-        
+
+        // Histograms should represent living identity, not inert/dead matter.
+        // Dead matter can retain mass while genome has been zeroed in normalize pass.
+        bool has_identity = dot(g1, g1) > 0.0001;
+        if (!has_identity) return;
+
         float genes[16];
-        
+
         // Genome 1
         vec2 d1 = unpack2(g1.r); genes[0] = d1.x; genes[1] = d1.y;
         vec2 d2 = unpack2(g1.g); genes[2] = d2.x; genes[3] = d2.y;
         vec2 d3 = unpack2(g1.b); genes[4] = d3.x; genes[5] = d3.y;
         vec2 d4 = unpack2(g1.a); genes[6] = d4.x; genes[7] = d4.y;
-        
+
         // Genome 2
         vec2 d5 = unpack2(g2.r); genes[8] = d5.x; genes[9] = d5.y;
         vec2 d6 = unpack2(g2.g); genes[10] = d6.x; genes[11] = d6.y;
         vec2 d7 = unpack2(g2.b); genes[12] = d7.x; genes[13] = d7.y;
         vec2 d8 = unpack2(g2.a); genes[14] = d8.x; genes[15] = d8.y;
-        
+
         for (int i = 0; i < 16; i++) {
-            // Check for NaNs just in case
             float val = genes[i];
             if (isnan(val)) val = 0.0;
             int bin = int(clamp(val, 0.0, 0.99) * 10.0);

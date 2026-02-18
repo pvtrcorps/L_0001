@@ -4,7 +4,6 @@
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(set = 0, binding = 0, std430) buffer Params {
-    // 0. Globals
     vec2 u_res;
     float u_dt;
     float u_seed;
@@ -20,62 +19,50 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_init_clusters;
     float u_init_density;
     float u_fluid_momentum;
-    
-    // 1. Gene Ranges (16 Genes * 2) = 32 floats
-    // Block A: Physiology
+
     vec2 r_mu; vec2 r_sigma; vec2 r_radius; vec2 r_viscosity;
-    // Block B: Morphology
     vec2 r_shape_a; vec2 r_shape_b; vec2 r_shape_c; vec2 r_inertia;
-    // Block C: Social / Motor
     vec2 r_affinity; vec2 r_repulsion; vec2 r_density_tol; vec2 r_mobility;
-    // Block D: Senses
     vec2 r_secretion; vec2 r_sensitivity; vec2 r_emission_hue; vec2 r_detection_hue;
-    
-    // Wind / Atmosphere
+
     float u_time;
     float u_wind_scale;
     float u_wind_strength;
     float u_wind_speed;
-    
-    // Signal Extras
+
     float u_signal_force_strength;
     float u_signal_emission_strength;
-    float u_pad1;
-    float u_pad2;
+    float u_interaction_beta;
+    float u_morph_anisotropy_gain;
     float u_colonize_thr;
+    float u_morph_polarity_gain;
+    float u_morph_plasticity_gain;
+    float u_pad0;
 } p;
 
 layout(set = 0, binding = 1, r32ui) uniform uimage2D img_mass_accum;
 layout(set = 0, binding = 2) uniform sampler2D tex_potential;
-layout(set = 0, binding = 3) uniform sampler2D tex_old_state; 
+layout(set = 0, binding = 3) uniform sampler2D tex_old_state;
 layout(set = 0, binding = 4, rgba32f) uniform image2D img_new_state;
 layout(set = 0, binding = 5, rgba32f) uniform image2D img_new_signal;
 layout(set = 0, binding = 6, r32ui) uniform uimage2D img_winner_tracker;
 layout(set = 0, binding = 7, rgba32f) uniform image2D img_new_genome;
 layout(set = 0, binding = 8) uniform sampler2D tex_old_genome;
-layout(set = 0, binding = 9) uniform sampler2D tex_genome_ext;      // Source Ext (Read Old)
-layout(set = 0, binding = 10, rgba32f) uniform image2D img_new_genome_ext; // Target Ext (Write New)
+layout(set = 0, binding = 9) uniform sampler2D tex_genome_ext;
+layout(set = 0, binding = 10, rgba32f) uniform image2D img_new_genome_ext;
 
-const float MASS_SCALE = 100000000.0; // 1e8 for High Precision
-
-// PCG Hash (1d)
-uint pcg_hash_1d(uint v) {
-    uint state = v * 747796405u + 2891336453u;
-    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
-    return (word >> 22u) ^ word;
-}
+const float MASS_SCALE = 100000000.0;
 
 vec2 unpack2(float packed) {
-    uint bits = floatBitsToUint(packed) & ~0x40000000u; // Clear normalization bit
+    uint bits = floatBitsToUint(packed) & ~0x40000000u;
     float a = float((bits >> 15u) & 0x7FFFu) / 32767.0;
     float b = float(bits & 0x7FFFu) / 32767.0;
     return vec2(a, b);
 }
 
-// Convert hue [0,1] to RGB using HSV with S=1, V=1
 vec3 HueToRGB(float hue) {
     float h = hue * 6.0;
-    float c = 1.0;  // Chroma (S*V = 1*1)
+    float c = 1.0;
     float x = c * (1.0 - abs(mod(h, 2.0) - 1.0));
     vec3 rgb;
     if (h < 1.0)      rgb = vec3(c, x, 0.0);
@@ -90,116 +77,79 @@ vec3 HueToRGB(float hue) {
 void main() {
     ivec2 uv_i = ivec2(gl_GlobalInvocationID.xy);
     if (uv_i.x >= int(p.u_res.x) || uv_i.y >= int(p.u_res.y)) return;
-    
-    // 1. Read Atomic Mass
+
     uint m_uint = imageLoad(img_mass_accum, uv_i).r;
-    imageStore(img_mass_accum, uv_i, uvec4(0)); // Reset
+    imageStore(img_mass_accum, uv_i, uvec4(0));
     float mass = float(m_uint) / MASS_SCALE;
-    
-    // 2. Retrieve Velocity calculated by Flow Shader
-    // We stored it in img_new_state.gb in the previous pass
+
     vec4 flowData = imageLoad(img_new_state, uv_i);
-    vec2 velocity = flowData.gb; 
-    
-    // Optional: Smooth or Damping could happen here, but we keep it raw for now.
-    
+    vec2 velocity = flowData.gb;
+    float final_polarity = flowData.a;
+
     vec2 px = 1.0 / p.u_res;
     vec2 uv = (vec2(uv_i) + 0.5) * px;
-    
-    // 3. Genome Update (Winner-Takes-All)
-    // If multiple source blocks moved mass here, the one with largest contribution (tracked in winner_tracker) wins.
+
     uint packed = imageLoad(img_winner_tracker, uv_i).r;
     imageStore(img_winner_tracker, uv_i, uvec4(0));
-    
+
     vec4 finalGenome1 = texture(tex_old_genome, uv);
-    vec4 finalGenome2 = texture(tex_genome_ext, uv); 
-    
-    if (packed != 0) {
-        uint winner_idx = packed & 0x3FFFFFu; // Extract bottom 22 bits (up to 2048x2048)
-        
+    vec4 finalGenome2 = texture(tex_genome_ext, uv);
+
+    if (packed != 0u) {
+        uint winner_idx = packed & 0x3FFFFFu;
+
         ivec2 res = ivec2(p.u_res);
-        ivec2 winner_coords = ivec2(winner_idx % res.x, winner_idx / res.x);
+        ivec2 winner_coords = ivec2(winner_idx % uint(res.x), winner_idx / uint(res.x));
         vec2 winner_uv = (vec2(winner_coords) + 0.5) / p.u_res;
-        
+
         finalGenome1 = texture(tex_old_genome, winner_uv);
         finalGenome2 = texture(tex_genome_ext, winner_uv);
-        
+        // Keep polarity coherent with the winning source that transferred identity.
+        final_polarity = imageLoad(img_new_state, winner_coords).a;
 
-        
-        // ZOMBIE CHECK:
-        // 1. Raw Null Check (Uninitialized Memory / Void)
         bool is_raw_null = dot(finalGenome1, finalGenome1) < 0.0001;
-        
-        // 2. Trait Null Check (Packed Zeroes)
-        // If a species has 0.0 traits, it packs to non-zero floats (approx 2.0).
-        // We must unpack to check if it's physically inert.
-        vec2 t_r = unpack2(finalGenome1.r); // Mu, Sigma
-        vec2 t_g = unpack2(finalGenome1.g); // Radius, Visc
-        vec2 t_a = unpack2(finalGenome1.a); // ShapeC, Growth
-        
-        // If core physiology (Mu, Radius, Growth) is 0, the species is dead/inert.
-        // We sum them up to check for "Ghost" signature.
-        float trait_sum = t_r.x + t_r.y + t_g.x + t_a.y; 
-        
+
+        vec2 t_r = unpack2(finalGenome1.r);
+        vec2 t_g = unpack2(finalGenome1.g);
+        vec2 t_a = unpack2(finalGenome1.a);
+        float trait_sum = t_r.x + t_r.y + t_g.x + t_a.y;
+
         if (is_raw_null || trait_sum < 0.01) {
-             // MASS CONSERVATION: Do NOT zero mass here.
-             // Strip identity only — mass becomes "dead matter"
-             // that neighboring species can absorb.
-             finalGenome1 = vec4(0.0);
-             finalGenome2 = vec4(0.0);
+            finalGenome1 = vec4(0.0);
+            finalGenome2 = vec4(0.0);
         }
-    } else {
-        // If no winner was registered but mass exists (e.g. blocked bounce-back / quantization),
-        // keep local identity instead of deleting mass.
-        // This avoids artificial mass loss from bookkeeping races.
     }
-    
-    // Write BOTH genomes to new generation (Move identity)
+
     imageStore(img_new_genome, uv_i, finalGenome1);
     imageStore(img_new_genome_ext, uv_i, finalGenome2);
-    
-    // 4. Secretion & Consumption Logic using Real Genes (Genome 2)
-    // Secretion: Ext B.x
+
     vec2 sec_sens = unpack2(finalGenome2.b);
     float g_secretion = sec_sens.x;
-    
-    // Emission Hue: Ext A.x
+
     vec2 hues = unpack2(finalGenome2.a);
     float g_emission_hue = hues.x;
-    
-    // 5. Final Mass, Emission & Consumption
+
     float finalMass = mass;
-    
-    // SELECTIVE CONSUMPTION/SECRETION
-    // Creatures only consume signal matching their detection_hue preference
-    // Skip for void mass (genome=0) — dead matter is inert
+
     bool has_identity = dot(finalGenome1, finalGenome1) > 0.0001;
     if (finalMass > 0.0001 && has_identity) {
         vec3 emittedColor = HueToRGB(g_emission_hue);
-        
-        // Unpack detection_hue from genome_ext A channel (same pack as emission)
+
         float g_detection_hue = hues.y;
         vec3 detectorColor = HueToRGB(g_detection_hue);
-        
-        vec4 currentSignal = imageLoad(img_new_signal, uv_i); 
-        
-        // A. Selective Consumption (Grazing)
-        // Only consume signal components that match our detection preference
-        // dot(signal, detector) measures how much of the signal we can "sense"
+
+        vec4 currentSignal = imageLoad(img_new_signal, uv_i);
+
         float match = max(0.0, dot(normalize(currentSignal.rgb + vec3(0.0001)), detectorColor));
         vec3 consumed = currentSignal.rgb * (match * finalMass * 0.5 * p.u_dt);
         vec3 signalAfterConsumption = currentSignal.rgb - consumed;
-        
-        // B. Secretion (Emission)
+
         vec3 addedSignal = emittedColor * (finalMass * g_secretion * p.u_dt * p.u_signal_emission_strength);
         vec3 nextSignal = signalAfterConsumption + addedSignal;
-        
-        // Clamp
+
         imageStore(img_new_signal, uv_i, vec4(max(vec3(0.0), nextSignal), 0.0));
     }
-    
-    // Store final state (Mass, Velocity, Debug/Extra)
-    // IDENTITY PRUNING: Only keep genome if mass is above threshold
+
     if (finalMass < p.u_colonize_thr) {
         finalGenome1 = vec4(0.0);
         finalGenome2 = vec4(0.0);
@@ -210,7 +160,7 @@ void main() {
         imageStore(img_new_genome, uv_i, vec4(0.0));
         imageStore(img_new_genome_ext, uv_i, vec4(0.0));
     } else {
-        imageStore(img_new_state, uv_i, vec4(finalMass, velocity, 0.0));
+        imageStore(img_new_state, uv_i, vec4(finalMass, velocity, final_polarity));
         imageStore(img_new_genome, uv_i, finalGenome1);
         imageStore(img_new_genome_ext, uv_i, finalGenome2);
     }

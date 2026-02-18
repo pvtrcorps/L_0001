@@ -9,6 +9,8 @@
 shader = ExtResource("1_shader")
 shader_parameter/camera_zoom = 1.0
 shader_parameter/camera_pos = Vector2(0, 0)
+shader_parameter/u_select_vector = Color(0, 0, 0, 1)
+shader_parameter/u_show_select = false
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_post"]
 shader = ExtResource("4_post")

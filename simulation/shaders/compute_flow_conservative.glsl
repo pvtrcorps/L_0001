@@ -151,6 +151,10 @@ void main() {
     vec4 g1 = texture(tex_genome, uv);
     vec4 g2 = texture(tex_genome_ext, uv);
     
+    // VOID CHECK: Mass with no genome is "dead matter"
+    // It still advects (mass conservation) but cannot colonize (no identity propagation)
+    bool is_void = dot(g1, g1) < 0.0001;
+    
     // Physiology
     vec2 rad_visc = unpack2(g1.g);
     float g_viscosity = rad_visc.y; // [0-1] Inertia/Drag
@@ -416,7 +420,7 @@ void main() {
                 uint packed_comp = (score_8bit << 24u) | (jitter_2bit << 22u) | (src_idx & 0x3FFFFFu);
                 
                 uint thr_uint = uint(p.u_colonize_thr * MASS_SCALE);
-                if (score_8bit > 0u && amount > thr_uint) {
+                if (score_8bit > 0u && amount > thr_uint && !is_void) {
                     imageAtomicMax(img_winner_tracker, target_uv, packed_comp);
                 }
             }

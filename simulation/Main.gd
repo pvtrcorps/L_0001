@@ -25,7 +25,7 @@ var ui_schema = {
 	"Flow Physics": [
 		["temperature", "Temperature (s)", 0.0, 3.0, 0.05],
 		["beta_selection", "Selection Pressure (β)", 0.0, 3.0, 0.1],
-		["interaction_beta", "Kernel Interaction (β)", 0.0, 10.0, 0.1],
+		["interaction_beta", "Kernel Interaction (β)", 0.0, 5.0, 0.1],
 		["flow_speed", "Flow Speed", 0.0, 10.0, 0.5],
 		["fluid_momentum", "Fluid Inertia", 0.0, 1.0, 0.05]
 	],
@@ -33,7 +33,7 @@ var ui_schema = {
 		["signal_diff", "Diffusion Rate", 0.0, 10.0, 0.1],
 		["signal_decay", "Decay Rate", 0.0, 1.0, 0.001],
 		["signal_advect", "Advection Weight", 0.0, 1.0, 0.01],
-		["signal_force_strength", "Signal Pull Force", 0.0, 100.0, 0.5],
+		["signal_force_strength", "Signal Pull Force", 0.0, 5.0, 0.1],
 		["signal_emission_strength", "Signal Emission (Volume)", 0.0, 20.0, 0.1]
 	],
 	"Wind / Atmosphere": [

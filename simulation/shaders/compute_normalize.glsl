@@ -142,7 +142,9 @@ void main() {
         float trait_sum = t_r.x + t_r.y + t_g.x + t_a.y; 
         
         if (is_raw_null || trait_sum < 0.01) {
-             mass = 0.0;
+             // MASS CONSERVATION: Do NOT zero mass here.
+             // Strip identity only — mass becomes "dead matter"
+             // that neighboring species can absorb.
              finalGenome1 = vec4(0.0);
              finalGenome2 = vec4(0.0);
         }
@@ -170,7 +172,9 @@ void main() {
     
     // SELECTIVE CONSUMPTION/SECRETION
     // Creatures only consume signal matching their detection_hue preference
-    if (finalMass > 0.0001) {
+    // Skip for void mass (genome=0) — dead matter is inert
+    bool has_identity = dot(finalGenome1, finalGenome1) > 0.0001;
+    if (finalMass > 0.0001 && has_identity) {
         vec3 emittedColor = HueToRGB(g_emission_hue);
         
         // Unpack detection_hue from genome_ext A channel (same pack as emission)

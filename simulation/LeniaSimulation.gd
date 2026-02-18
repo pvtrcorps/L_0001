@@ -20,7 +20,7 @@ var params = {
 
 	# Initialization
 	"init_clusters": 24.0,
-	"init_density": 0.5,   # Higher density for better start
+	"init_density": 0.75,   # Higher density for better start
 	"colonize_thr": 0.001, # [DUST THRESOLHD] Mass below this loses identity
 	
 	# Advanced Physics (Flow Lenia style)
@@ -43,9 +43,9 @@ var params = {
 	"wind_speed": 0.05,     # Animation speed
 	
 	# Signal Advanced
-	"signal_force_strength": 20.0,   # Multiplier for signal gradient force
+	"signal_force_strength": 1.0,   # Multiplier for signal gradient force
 	"signal_emission_strength": 1.0, # Multiplier for signal secretion quantity
-	"interaction_beta": 0.0,         # Hue-based inter-species force. 0=off
+	"interaction_beta": 1.0,         # Hue-based inter-species force. 0=off
 	"genetic_barrier": 0.0,          # [DEPRECATED] UBO padding - not read by shaders
 	
 	# === GENE RANGES (16 GENES x 2 MIN/MAX) ===
@@ -62,8 +62,8 @@ var params = {
 	"g_inertia_min": 0.0, "g_inertia_max": 1.0, # 8. [DEPRECATED] UBO padding
 	
 	# BLOCK C: Social & Motor (Mind)
-	"g_affinity_min": 0.2, "g_affinity_max": 1.0, # 9. [DEPRECATED] UBO padding
-	"g_repulsion_min": 0.3, "g_repulsion_max": 0.8, # 10. Hollow Core (Kernel shape)
+	"g_affinity_min": 0.0, "g_affinity_max": 1.0, # 9. [DEPRECATED] UBO padding
+	"g_repulsion_min": 0.0, "g_repulsion_max": 1.0, # 10. Hollow Core (Kernel shape)
 	"g_density_tol_min": 0.0, "g_density_tol_max": 1.0, # 11. [DEPRECATED] UBO padding
 	"g_mobility_min": 0.0, "g_mobility_max": 1.0, # 12. Speed Base
 	

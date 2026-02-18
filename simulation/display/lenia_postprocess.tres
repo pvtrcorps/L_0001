@@ -36,12 +36,12 @@ op_type = 0
 constant = 1.0
 
 [sub_resource type="VisualShaderNodeFloatConstant" id="VisualShaderNodeFloatConstant_iiwv3"]
-constant = 0.003
+constant = 0.002
 
 [sub_resource type="VisualShaderNodeFloatOp" id="VisualShaderNodeFloatOp_xl33g"]
+operator = 1
 
 [sub_resource type="VisualShaderNodeFloatOp" id="VisualShaderNodeFloatOp_800xr"]
-operator = 1
 
 [sub_resource type="VisualShaderNodeTexture" id="VisualShaderNodeTexture_d3vk6"]
 source = 1
@@ -161,11 +161,11 @@ void fragment() {
 
 
 // FloatConstant:25
-	float n_out25p0 = 0.003000;
+	float n_out25p0 = 0.002000;
 
 
 // FloatOp:26
-	float n_out26p0 = n_out24p0 + n_out25p0;
+	float n_out26p0 = n_out24p0 - n_out25p0;
 
 
 // VectorOp:5
@@ -245,7 +245,7 @@ void fragment() {
 
 
 // FloatOp:27
-	float n_out27p0 = n_out24p0 - n_out25p0;
+	float n_out27p0 = n_out24p0 + n_out25p0;
 
 
 // VectorOp:9
@@ -408,7 +408,6 @@ nodes/fragment/26/node = SubResource("VisualShaderNodeFloatOp_xl33g")
 nodes/fragment/26/position = Vector2(-840, 20)
 nodes/fragment/27/node = SubResource("VisualShaderNodeFloatOp_800xr")
 nodes/fragment/27/position = Vector2(-840, 260)
-nodes/fragment/56/position = Vector2(0, 0)
 nodes/fragment/58/node = SubResource("VisualShaderNodeVectorOp_tcyj5")
 nodes/fragment/58/position = Vector2(1220, -20)
 nodes/fragment/59/node = SubResource("VisualShaderNodeFloatOp_ttvel")

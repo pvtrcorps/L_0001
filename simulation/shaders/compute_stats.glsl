@@ -62,7 +62,7 @@ void main() {
     vec2 uv = (vec2(uv_i) + 0.5) / p.u_res;
     float mass = texture(tex_state, uv).r;
     
-    if (mass > 0.05) {
+    if (mass > 0.001) {
         atomicAdd(s.total_mass, uint(mass * 1000.0));
         atomicAdd(s.population, 1);
         

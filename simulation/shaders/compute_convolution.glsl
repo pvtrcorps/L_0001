@@ -16,10 +16,10 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_theta_A;
     float u_alpha_n;
     float u_temperature;
-    float u_signal_advect;
+    float u_detritus_advect;     // was: u_signal_advect
     float u_beta;
-    float u_signal_diff;
-    float u_signal_decay;
+    float u_detritus_diff;       // was: u_signal_diff
+    float u_mass_decay_rate;     // was: u_signal_decay
     float u_flow_speed;
     float u_init_clusters;
     float u_init_density;
@@ -35,8 +35,8 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_wind_strength;
     float u_wind_speed;
 
-    float u_signal_force_strength;
-    float u_signal_emission_strength;
+    float u_detritus_force_strength;  // was: u_signal_force_strength
+    float u_mass_digest_rate;         // was: u_signal_emission_strength
     float u_interaction_beta;
     float u_morph_anisotropy_gain;
     float u_colonize_thr;

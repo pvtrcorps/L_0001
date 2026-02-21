@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dry41a6y3xlj6"
+path="res://.godot/imported/compute_detritus.glsl-720500e98420d590c9c219500d290d25.res"
+
+[deps]
+
+source_file="res://simulation/shaders/compute_detritus.glsl"
+dest_files=["res://.godot/imported/compute_detritus.glsl-720500e98420d590c9c219500d290d25.res"]
+
+[params]
+

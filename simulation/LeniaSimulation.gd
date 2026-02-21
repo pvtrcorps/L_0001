@@ -1,6 +1,6 @@
 extends Node
 
-signal stats_updated(total_mass, population, histograms)
+signal stats_updated(total_mass, population, histograms, detritus_mass)
 signal species_list_updated(species_list)
 signal species_hovered(info) # New signal
 # SpeciesTracker is a global class
@@ -28,10 +28,10 @@ var params = {
 	"theta_A": 1.0,        # [DEPRECATED] UBO padding - not read by shaders
 	"alpha_n": 4.0,        # [DEPRECATED] UBO padding - not read by shaders
 	
-	# Signal Layer
-	"signal_diff": 2.0,    # Diffusion Rate
-	"signal_decay": 0.0,   # Decay Rate
-	"signal_advect": 1.0,  # Signal advection weight [0-1]
+	# Detritus Layer (replaces Signal Layer)
+	"detritus_diff": 1.5,       # Detritus diffusion rate
+	"mass_decay_rate": 0.005,   # Metabolic decay: living mass → detritus
+	"detritus_advect": 0.8,     # Detritus advection by wind [0-2]
 	"flow_speed": 1.0,     # [CANONICAL: 1.0]. Multiplier for advection force
 	"fluid_momentum": 0.0, # [CANONICAL: 0.0]. Aristotelian Physics (No Inertia)
 	
@@ -42,9 +42,9 @@ var params = {
 	"wind_strength": 0.5,  # Wind force multiplier
 	"wind_speed": 0.05,     # Animation speed
 	
-	# Signal Advanced
-	"signal_force_strength": 0.0,   # Multiplier for signal gradient force
-	"signal_emission_strength": 0.0, # Multiplier for signal secretion quantity
+	# Detritus Advanced (Feeding / Chemotaxis)
+	"detritus_force_strength": 0.5,  # Multiplier for detritus gradient chemotaxis
+	"mass_digest_rate": 0.1,         # Feeding rate: detritus → living mass
 	"interaction_beta": 1.0,         # Hue-based inter-species force. 0=off
 	"morph_anisotropy_gain": 1.0,    # Global gain for anisotropic morphology effects
 	"morph_polarity_gain": 1.0,      # Global gain for internal polarity persistence/steering
@@ -85,7 +85,7 @@ var shader_conv_h: RID  # [SEPARABLE] Horizontal pass
 var shader_conv_v: RID  # [SEPARABLE] Vertical pass
 
 var shader_stats: RID
-var shader_signal: RID
+var shader_detritus: RID
 var pipeline_init: RID
 var pipeline_conv: RID
 var pipeline_conv_h: RID  # [SEPARABLE]
@@ -95,7 +95,7 @@ var pipeline_stats: RID
 var pipeline_analysis: RID
 var pipeline_flow_conservative: RID
 var pipeline_normalize: RID
-var pipeline_signal: RID
+var pipeline_detritus: RID
 var shader_analysis: RID
 var shader_flow_conservative: RID
 var shader_normalize: RID
@@ -111,8 +111,10 @@ var tex_potential: RID
 var tex_conv_intermediate: RID  # [SEPARABLE] H→V pass buffer
 var tex_mass_accum: RID
 var tex_winner_tracker: RID
-var tex_signal_a: RID
-var tex_signal_b: RID
+var tex_detritus_a: RID  # R=mass, G=hue (replaces signal)
+var tex_detritus_b: RID
+var tex_detritus_mass_accum: RID  # R32_UINT atomic accumulator for detritus transport
+var tex_detritus_hue_accum: RID   # R32_UINT atomic accumulator for hue transport
 var tex_polarity_a: RID
 var tex_polarity_b: RID
 
@@ -120,7 +122,7 @@ var tex_polarity_b: RID
 var texture_rd_state: Texture2DRD
 var texture_rd_genome: Texture2DRD
 var texture_rd_genome_ext: Texture2DRD # [NEW]
-var texture_rd_signal: Texture2DRD # [NEW]
+var texture_rd_detritus: Texture2DRD
 var texture_rd_polarity: Texture2DRD
 
 var ubo: RID
@@ -180,7 +182,7 @@ func _ready():
 	add_child(camera)
 	camera.inspect_requested.connect(_on_camera_inspect)
 	
-	print("Parametric Lenia with Signaling initialized.")
+	print("Parametric Lenia with Detritus System initialized.")
 
 func _process(delta):
 	if not initialized or rd == null: return
@@ -202,7 +204,7 @@ func _process(delta):
 		var bytes = rd.buffer_get_data(stats_buffer)
 		stats_pending_frame = -1 # Reset
 		
-		if bytes.size() >= 648:
+		if bytes.size() >= 652:
 			var ints = bytes.to_int32_array()
 			var total_mass = float(ints[0]) / 1000.0
 			var population = ints[1]
@@ -213,7 +215,9 @@ func _process(delta):
 				for b in range(10):
 					bins.append(ints[2 + g * 10 + b])
 				histograms.append(bins)
-			emit_signal("stats_updated", total_mass, population, histograms)
+			
+			var detritus_mass = float(ints[162]) / 1000.0
+			emit_signal("stats_updated", total_mass, population, histograms, detritus_mass)
 
 	# Schedule new stats dispatch if not pending and interval met
 	stats_frame_count += 1
@@ -249,7 +253,7 @@ func _process(delta):
 	if display_material:
 		var current_state = tex_state_b if ping_pong else tex_state_a
 		var current_genome = tex_genome_b if ping_pong else tex_genome_a
-		var current_signal = tex_signal_b if ping_pong else tex_signal_a
+		var current_detritus = tex_detritus_b if ping_pong else tex_detritus_a
 		var current_polarity = tex_polarity_b if ping_pong else tex_polarity_a
 		
 		if texture_rd_state.texture_rd_rid != current_state:
@@ -258,8 +262,8 @@ func _process(delta):
 		if texture_rd_genome.texture_rd_rid != current_genome:
 			texture_rd_genome.texture_rd_rid = current_genome
 			
-		if texture_rd_signal.texture_rd_rid != current_signal:
-			texture_rd_signal.texture_rd_rid = current_signal
+		if texture_rd_detritus.texture_rd_rid != current_detritus:
+			texture_rd_detritus.texture_rd_rid = current_detritus
 		
 		if texture_rd_polarity.texture_rd_rid != current_polarity:
 			texture_rd_polarity.texture_rd_rid = current_polarity
@@ -297,8 +301,8 @@ func _update_ubo():
 		# Chunk 1 (16-32 bytes): R, Theta, Alpha, Temp
 		params["R"], params["theta_A"], params["alpha_n"], params["temperature"],
 		
-		# Chunk 2 (32-48 bytes): Signal Props + Beta
-		params["signal_advect"], params["beta_selection"], params["signal_diff"], params["signal_decay"],
+		# Chunk 2 (32-48 bytes): Detritus Props + Beta
+		params["detritus_advect"], params["beta_selection"], params["detritus_diff"], params["mass_decay_rate"],
 		
 		# Chunk 3 (48-64 bytes): Flow + Init Props
 		params["flow_speed"], params["init_clusters"], params["init_density"], params["fluid_momentum"],
@@ -323,8 +327,8 @@ func _update_ubo():
 		# Chunk 4 (Wind/Atmosphere) - Appended to end
 		params_time, params["wind_scale"], params["wind_strength"], params["wind_speed"],
 		
-		# Chunk 5 (Signal + Morph Extras)
-		params["signal_force_strength"], params["signal_emission_strength"], params["interaction_beta"], params["morph_anisotropy_gain"],
+		# Chunk 5 (Detritus + Morph Extras)
+		params["detritus_force_strength"], params["mass_digest_rate"], params["interaction_beta"], params["morph_anisotropy_gain"],
 		
 		# Chunk 6 (Morph Controls + Cleanup)
 		params["colonize_thr"], params["morph_polarity_gain"], params["morph_plasticity_gain"], params["morph_self_propulsion_gain"]
@@ -340,28 +344,26 @@ func _dispatch_step():
 	var dst_genome = tex_genome_b if not ping_pong else tex_genome_a
 	var src_genome_ext = tex_genome_ext_a if not ping_pong else tex_genome_ext_b
 	var dst_genome_ext = tex_genome_ext_b if not ping_pong else tex_genome_ext_a
-	var src_signal = tex_signal_a if not ping_pong else tex_signal_b
-	var dst_signal = tex_signal_b if not ping_pong else tex_signal_a
+	var src_detritus = tex_detritus_a if not ping_pong else tex_detritus_b
+	var dst_detritus = tex_detritus_b if not ping_pong else tex_detritus_a
 	var src_polarity = tex_polarity_a if not ping_pong else tex_polarity_b
 	var dst_polarity = tex_polarity_b if not ping_pong else tex_polarity_a
 	
 	var wg_x = int(ceil(params["res_x"] / 8.0))
 	var wg_y = int(ceil(params["res_y"] / 8.0))
 	
-	# 1. Signal Evolution Pass
-	var key_signal = "sig_" + str(ping_pong)
-	var set_signal = set_cache.get(key_signal)
-	if not set_signal or not set_signal.is_valid():
-		set_signal = _create_set_signal(src_signal, dst_signal, src_state)
-		set_cache[key_signal] = set_signal
+	# 1. Detritus Transport Pass (conservative)
+	var key_det = "det_" + str(ping_pong)
+	var set_det = set_cache.get(key_det)
+	if not set_det or not set_det.is_valid():
+		set_det = _create_set_detritus(src_detritus, tex_detritus_mass_accum, tex_detritus_hue_accum)
+		set_cache[key_det] = set_det
 		
-	var compute_list_signal = rd.compute_list_begin()
-	rd.compute_list_bind_compute_pipeline(compute_list_signal, pipeline_signal)
-	rd.compute_list_bind_uniform_set(compute_list_signal, set_signal, 0)
-	rd.compute_list_dispatch(compute_list_signal, wg_x, wg_y, 1)
+	var compute_list_det = rd.compute_list_begin()
+	rd.compute_list_bind_compute_pipeline(compute_list_det, pipeline_detritus)
+	rd.compute_list_bind_uniform_set(compute_list_det, set_det, 0)
+	rd.compute_list_dispatch(compute_list_det, wg_x, wg_y, 1)
 	rd.compute_list_end()
-	
-	# rd.barrier(RenderingDevice.BARRIER_MASK_COMPUTE) # barrier automatically inserted
 	
 	# 2. Convolution Pass (Optimized 2D with 16×16 workgroups)
 	var wg_conv_x = int(ceil(params["res_x"] / 16.0))
@@ -370,7 +372,7 @@ func _dispatch_step():
 	var key_conv = "conv_" + str(ping_pong)
 	var set_conv = set_cache.get(key_conv)
 	if not set_conv or not set_conv.is_valid():
-		set_conv = _create_set_conv(src_state, src_genome, dst_signal, src_genome_ext, tex_potential, src_polarity)
+		set_conv = _create_set_conv(src_state, src_genome, src_detritus, src_genome_ext, tex_potential, src_polarity)
 		set_cache[key_conv] = set_conv
 		
 	var compute_list = rd.compute_list_begin()
@@ -383,8 +385,7 @@ func _dispatch_step():
 	var cache_key_flow = "flow_" + str(ping_pong)
 	var set_flow_con = set_cache.get(cache_key_flow)
 	if not set_flow_con or not set_flow_con.is_valid():
-		# Signature: src_state, src_genome, src_genome_ext, src_potential, src_sig, dst_mass, dst_state, dst_genome, dst_winner
-		set_flow_con = _create_set_flow_conservative(src_state, src_genome, src_genome_ext, tex_potential, dst_signal, tex_mass_accum, dst_state, dst_genome, tex_winner_tracker, src_polarity)
+		set_flow_con = _create_set_flow_conservative(src_state, src_genome, src_genome_ext, tex_potential, src_detritus, tex_mass_accum, dst_state, dst_genome, tex_winner_tracker, src_polarity)
 		set_cache[cache_key_flow] = set_flow_con
 	
 	var compute_list_flow = rd.compute_list_begin()
@@ -393,14 +394,11 @@ func _dispatch_step():
 	rd.compute_list_dispatch(compute_list_flow, wg_x, wg_y, 1)
 	rd.compute_list_end()
 	
-	# rd.barrier(RenderingDevice.BARRIER_MASK_COMPUTE) # barrier automatically inserted by RD
-	
-	# 4. Normalize Pass
+	# 4. Normalize Pass (with detritus decay, feeding, and accumulator reconstruction)
 	var key_norm = "norm_" + str(ping_pong)
 	var set_norm = set_cache.get(key_norm)
 	if not set_norm or not set_norm.is_valid():
-		# Signature: src_mass, src_pot, old_state, dst_state, dst_sig, src_winner, dst_genome, old_genome, src_genome_ext, dst_genome_ext
-		set_norm = _create_set_normalize(tex_mass_accum, tex_potential, src_state, dst_state, dst_signal, tex_winner_tracker, dst_genome, src_genome, src_genome_ext, dst_genome_ext, src_polarity, dst_polarity)
+		set_norm = _create_set_normalize(tex_mass_accum, tex_potential, src_state, dst_state, dst_detritus, tex_winner_tracker, dst_genome, src_genome, src_genome_ext, dst_genome_ext, src_polarity, dst_polarity, tex_detritus_mass_accum, tex_detritus_hue_accum)
 		set_cache[key_norm] = set_norm
 	
 	var compute_list_norm = rd.compute_list_begin()
@@ -415,19 +413,20 @@ func _dispatch_stats():
 	var dst_state = tex_state_b if ping_pong else tex_state_a
 	var dst_genome = tex_genome_b if ping_pong else tex_genome_a
 	var dst_genome_ext = tex_genome_ext_b if ping_pong else tex_genome_ext_a
+	var dst_detritus = tex_detritus_b if ping_pong else tex_detritus_a
 	var wg_x = int(ceil(params["res_x"] / 8.0))
 	var wg_y = int(ceil(params["res_y"] / 8.0))
 	
 	var key_stats = "stats_" + str(ping_pong)
 	var set_stats = set_cache.get(key_stats)
 	if not set_stats or not set_stats.is_valid():
-		set_stats = _create_set_stats(dst_state, dst_genome, dst_genome_ext)
+		set_stats = _create_set_stats(dst_state, dst_genome, dst_genome_ext, dst_detritus)
 		set_cache[key_stats] = set_stats
 		
-	# Clear stats buffer (162 uints = 648 bytes)
+	# Clear stats buffer (163 uints = 652 bytes)
 	var clear_bytes = PackedByteArray()
-	clear_bytes.resize(648)
-	rd.buffer_update(stats_buffer, 0, 648, clear_bytes)
+	clear_bytes.resize(652)
+	rd.buffer_update(stats_buffer, 0, 652, clear_bytes)
 	
 	var compute_list_stats = rd.compute_list_begin()
 	rd.compute_list_bind_compute_pipeline(compute_list_stats, pipeline_stats)
@@ -477,10 +476,12 @@ func _dispatch_init():
 	rd.texture_copy(tex_genome_a, tex_genome_b, Vector3(0,0,0), Vector3(0,0,0), Vector3(params["res_x"], params["res_y"], 1), 0, 0, 0, 0)
 	rd.texture_copy(tex_genome_ext_a, tex_genome_ext_b, Vector3(0,0,0), Vector3(0,0,0), Vector3(params["res_x"], params["res_y"], 1), 0, 0, 0, 0)
 	rd.texture_copy(tex_polarity_a, tex_polarity_b, Vector3(0,0,0), Vector3(0,0,0), Vector3(params["res_x"], params["res_y"], 1), 0, 0, 0, 0)
-	rd.texture_clear(tex_signal_a, Color(0,0,0,0), 0, 1, 0, 1)
-	rd.texture_clear(tex_signal_b, Color(0,0,0,0), 0, 1, 0, 1)
+	rd.texture_clear(tex_detritus_a, Color(0,0,0,0), 0, 1, 0, 1)
+	rd.texture_clear(tex_detritus_b, Color(0,0,0,0), 0, 1, 0, 1)
 	rd.texture_clear(tex_mass_accum, Color(0,0,0,0), 0, 1, 0, 1)
 	rd.texture_clear(tex_winner_tracker, Color(0,0,0,0), 0, 1, 0, 1)
+	rd.texture_clear(tex_detritus_mass_accum, Color(0,0,0,0), 0, 1, 0, 1)
+	rd.texture_clear(tex_detritus_hue_accum, Color(0,0,0,0), 0, 1, 0, 1)
 	
 	# rd.barrier(RenderingDevice.BARRIER_MASK_COMPUTE) # barrier automatically inserted
 	ping_pong = false
@@ -492,10 +493,10 @@ func _create_uniforms():
 	var bytes = buffer.to_byte_array()
 	ubo = rd.storage_buffer_create(bytes.size(), bytes)
 	
-	# Stats Buffer: 162 uints = 648 bytes
+	# Stats Buffer: 163 uints = 652 bytes (added detritus_mass)
 	var stats_bytes = PackedByteArray()
-	stats_bytes.resize(648)
-	stats_buffer = rd.storage_buffer_create(648, stats_bytes)
+	stats_bytes.resize(652)
+	stats_buffer = rd.storage_buffer_create(652, stats_bytes)
 	
 	# Analysis Buffer: 4096 cells * 18 floats * 4 bytes = 294912 bytes
 	var analysis_bytes = PackedByteArray()
@@ -538,25 +539,25 @@ func _create_textures():
 	tex_genome_ext_b = rd.texture_create(fmt, RDTextureView.new())
 	tex_potential = rd.texture_create(fmt, RDTextureView.new())
 	
-	# Signal Textures (RGBA32F for compatibility)
-	var fmt_sig = RDTextureFormat.new()
-	fmt_sig.width = int(params["res_x"])
-	fmt_sig.height = int(params["res_y"])
-	fmt_sig.format = RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT
-	fmt_sig.usage_bits = (
+	# Detritus Textures (RGBA32F: R=mass, G=hue, BA=reserved)
+	var fmt_det = RDTextureFormat.new()
+	fmt_det.width = int(params["res_x"])
+	fmt_det.height = int(params["res_y"])
+	fmt_det.format = RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT
+	fmt_det.usage_bits = (
 		RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT | 
 		RenderingDevice.TEXTURE_USAGE_STORAGE_BIT | 
 		RenderingDevice.TEXTURE_USAGE_CAN_UPDATE_BIT | 
 		RenderingDevice.TEXTURE_USAGE_CAN_COPY_FROM_BIT |
 		RenderingDevice.TEXTURE_USAGE_CAN_COPY_TO_BIT
 	)
-	tex_signal_a = rd.texture_create(fmt_sig, RDTextureView.new())
-	tex_signal_b = rd.texture_create(fmt_sig, RDTextureView.new())
-	tex_polarity_a = rd.texture_create(fmt_sig, RDTextureView.new())
-	tex_polarity_b = rd.texture_create(fmt_sig, RDTextureView.new())
+	tex_detritus_a = rd.texture_create(fmt_det, RDTextureView.new())
+	tex_detritus_b = rd.texture_create(fmt_det, RDTextureView.new())
+	tex_polarity_a = rd.texture_create(fmt_det, RDTextureView.new())
+	tex_polarity_b = rd.texture_create(fmt_det, RDTextureView.new())
 	
 	# Intermediate buffer for separable convolution (H→V pass)
-	tex_conv_intermediate = rd.texture_create(fmt_sig, RDTextureView.new())
+	tex_conv_intermediate = rd.texture_create(fmt_det, RDTextureView.new())
 	
 	# Atomic Mass Accumulation (R32_UINT)
 	var fmt_atomic = RDTextureFormat.new()
@@ -571,23 +572,25 @@ func _create_textures():
 	)
 	tex_mass_accum = rd.texture_create(fmt_atomic, RDTextureView.new())
 	tex_winner_tracker = rd.texture_create(fmt_atomic, RDTextureView.new())
+	tex_detritus_mass_accum = rd.texture_create(fmt_atomic, RDTextureView.new())
+	tex_detritus_hue_accum = rd.texture_create(fmt_atomic, RDTextureView.new())
 	
 	# Create Texture2DRD bridges for display
 	texture_rd_state = Texture2DRD.new()
 	texture_rd_genome = Texture2DRD.new()
 	texture_rd_genome_ext = Texture2DRD.new()
-	texture_rd_signal = Texture2DRD.new()
+	texture_rd_detritus = Texture2DRD.new()
 	texture_rd_polarity = Texture2DRD.new()
 	texture_rd_state.texture_rd_rid = tex_state_a
 	texture_rd_genome.texture_rd_rid = tex_genome_a
 	texture_rd_genome_ext.texture_rd_rid = tex_genome_ext_a
-	texture_rd_signal.texture_rd_rid = tex_signal_a
+	texture_rd_detritus.texture_rd_rid = tex_detritus_a
 	texture_rd_polarity.texture_rd_rid = tex_polarity_a
 	
 	if display_material:
 		display_material.set_shader_parameter("tex_state", texture_rd_state)
 		display_material.set_shader_parameter("tex_genome", texture_rd_genome)
-		display_material.set_shader_parameter("tex_signal", texture_rd_signal)
+		display_material.set_shader_parameter("tex_detritus", texture_rd_detritus)
 		display_material.set_shader_parameter("tex_polarity", texture_rd_polarity)
 
 func _compile_shaders():
@@ -600,7 +603,7 @@ func _compile_shaders():
 		"analysis": "res://simulation/shaders/compute_analysis.glsl",
 		"flow_con": "res://simulation/shaders/compute_flow_conservative.glsl",
 		"norm": "res://simulation/shaders/compute_normalize.glsl",
-		"signal": "res://simulation/shaders/compute_signal.glsl"
+		"detritus": "res://simulation/shaders/compute_detritus.glsl"
 	}
 	
 	shader_init = _load_shader(paths["init"])
@@ -611,7 +614,7 @@ func _compile_shaders():
 	shader_analysis = _load_shader(paths["analysis"])
 	shader_flow_conservative = _load_shader(paths["flow_con"])
 	shader_normalize = _load_shader(paths["norm"])
-	shader_signal = _load_shader(paths["signal"])
+	shader_detritus = _load_shader(paths["detritus"])
 	
 	# Validate Shaders before creating pipelines
 	if not shader_init.is_valid(): push_error("Shader Init invalid")
@@ -639,8 +642,8 @@ func _compile_shaders():
 	if not shader_normalize.is_valid(): push_error("Shader Norm invalid")
 	else: pipeline_normalize = rd.compute_pipeline_create(shader_normalize)
 	
-	if not shader_signal.is_valid(): push_error("Shader Signal invalid")
-	else: pipeline_signal = rd.compute_pipeline_create(shader_signal)
+	if not shader_detritus.is_valid(): push_error("Shader Detritus invalid")
+	else: pipeline_detritus = rd.compute_pipeline_create(shader_detritus)
 
 func _load_shader(path: String) -> RID:
 	# Prioritize Direct Source Loading to avoid .import lag
@@ -691,7 +694,7 @@ func _create_set_init(dst_state: RID, dst_genome: RID, dst_genome_ext: RID, dst_
 	
 	return rd.uniform_set_create([u_ubo, u_state, u_genome, u_genome_ext, u_polarity], shader_init, 0)
 
-func _create_set_signal(src_sig: RID, dst_sig: RID, src_state: RID) -> RID:
+func _create_set_detritus(src_det: RID, dst_mass_accum: RID, dst_hue_accum: RID) -> RID:
 	var u_ubo = RDUniform.new()
 	u_ubo.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
 	u_ubo.binding = 0
@@ -701,22 +704,21 @@ func _create_set_signal(src_sig: RID, dst_sig: RID, src_state: RID) -> RID:
 	u_src.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 	u_src.binding = 1
 	u_src.add_id(sampler_linear)
-	u_src.add_id(src_sig)
+	u_src.add_id(src_det)
 	
-	var u_dst = RDUniform.new()
-	u_dst.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
-	u_dst.binding = 2
-	u_dst.add_id(dst_sig)
+	var u_mass_accum = RDUniform.new()
+	u_mass_accum.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	u_mass_accum.binding = 2
+	u_mass_accum.add_id(dst_mass_accum)
 	
-	var u_state = RDUniform.new()
-	u_state.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-	u_state.binding = 3
-	u_state.add_id(sampler_linear)
-	u_state.add_id(src_state)
+	var u_hue_accum = RDUniform.new()
+	u_hue_accum.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	u_hue_accum.binding = 3
+	u_hue_accum.add_id(dst_hue_accum)
 	
-	return rd.uniform_set_create([u_ubo, u_src, u_dst, u_state], shader_signal, 0)
+	return rd.uniform_set_create([u_ubo, u_src, u_mass_accum, u_hue_accum], shader_detritus, 0)
 
-func _create_set_conv(src_state: RID, src_genome: RID, src_sig: RID, src_genome_ext: RID, dst_potential: RID, src_polarity: RID) -> RID:
+func _create_set_conv(src_state: RID, src_genome: RID, src_det: RID, src_genome_ext: RID, dst_potential: RID, src_polarity: RID) -> RID:
 	var u_ubo = RDUniform.new()
 	u_ubo.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
 	u_ubo.binding = 0
@@ -734,11 +736,11 @@ func _create_set_conv(src_state: RID, src_genome: RID, src_sig: RID, src_genome_
 	u_genome.add_id(sampler_nearest)
 	u_genome.add_id(src_genome)
 	
-	var u_sig = RDUniform.new()
-	u_sig.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-	u_sig.binding = 3
-	u_sig.add_id(sampler_linear)
-	u_sig.add_id(src_sig)
+	var u_det = RDUniform.new()
+	u_det.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	u_det.binding = 3
+	u_det.add_id(sampler_linear)
+	u_det.add_id(src_det)
 	
 	var u_potential = RDUniform.new()
 	u_potential.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
@@ -757,11 +759,11 @@ func _create_set_conv(src_state: RID, src_genome: RID, src_sig: RID, src_genome_
 	u_polarity.add_id(sampler_linear)
 	u_polarity.add_id(src_polarity)
 	
-	return rd.uniform_set_create([u_ubo, u_state, u_genome, u_sig, u_potential, u_genome_ext, u_polarity], shader_conv, 0)
+	return rd.uniform_set_create([u_ubo, u_state, u_genome, u_det, u_potential, u_genome_ext, u_polarity], shader_conv, 0)
 
 # === SEPARABLE CONVOLUTION UNIFORM SETS ===
 
-func _create_set_conv_h(src_state: RID, src_signal: RID, dst_intermediate: RID) -> RID:
+func _create_set_conv_h(src_state: RID, src_detritus: RID, dst_intermediate: RID) -> RID:
 	var u_ubo = RDUniform.new()
 	u_ubo.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
 	u_ubo.binding = 0
@@ -773,18 +775,18 @@ func _create_set_conv_h(src_state: RID, src_signal: RID, dst_intermediate: RID) 
 	u_state.add_id(sampler_nearest)
 	u_state.add_id(src_state)
 	
-	var u_signal = RDUniform.new()
-	u_signal.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-	u_signal.binding = 2
-	u_signal.add_id(sampler_nearest)
-	u_signal.add_id(src_signal)
+	var u_detritus = RDUniform.new()
+	u_detritus.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	u_detritus.binding = 2
+	u_detritus.add_id(sampler_nearest)
+	u_detritus.add_id(src_detritus)
 	
 	var u_intermediate = RDUniform.new()
 	u_intermediate.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
 	u_intermediate.binding = 3
 	u_intermediate.add_id(dst_intermediate)
 	
-	return rd.uniform_set_create([u_ubo, u_state, u_signal, u_intermediate], shader_conv_h, 0)
+	return rd.uniform_set_create([u_ubo, u_state, u_detritus, u_intermediate], shader_conv_h, 0)
 
 func _create_set_conv_v(src_intermediate: RID, src_genome: RID, src_genome_ext: RID, dst_potential: RID) -> RID:
 	var u_ubo = RDUniform.new()
@@ -818,7 +820,7 @@ func _create_set_conv_v(src_intermediate: RID, src_genome: RID, src_genome_ext: 
 	return rd.uniform_set_create([u_ubo, u_intermediate, u_genome, u_genome_ext, u_potential], shader_conv_v, 0)
 
 
-func _create_set_stats(tex_state: RID, tex_genome: RID, tex_genome_ext: RID) -> RID:
+func _create_set_stats(tex_state: RID, tex_genome: RID, tex_genome_ext: RID, tex_det: RID) -> RID:
 	var u_ubo = RDUniform.new()
 	u_ubo.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
 	u_ubo.binding = 0
@@ -847,7 +849,13 @@ func _create_set_stats(tex_state: RID, tex_genome: RID, tex_genome_ext: RID) -> 
 	u_genome_ext.add_id(sampler_nearest)
 	u_genome_ext.add_id(tex_genome_ext)
 	
-	return rd.uniform_set_create([u_ubo, u_state, u_genome, u_stats, u_genome_ext], shader_stats, 0)
+	var u_det = RDUniform.new()
+	u_det.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	u_det.binding = 5
+	u_det.add_id(sampler_linear)
+	u_det.add_id(tex_det)
+	
+	return rd.uniform_set_create([u_ubo, u_state, u_genome, u_stats, u_genome_ext, u_det], shader_stats, 0)
 
 func _create_set_analysis(tex_state: RID, tex_genome: RID, tex_genome_ext: RID, tex_polarity: RID) -> RID:
 	var u_ubo = RDUniform.new()
@@ -886,7 +894,7 @@ func _create_set_analysis(tex_state: RID, tex_genome: RID, tex_genome_ext: RID, 
 	
 	return rd.uniform_set_create([u_ubo, u_state, u_genome, u_genome_ext, u_polarity, u_analysis], shader_analysis, 0)
 
-func _create_set_flow_conservative(src_state: RID, src_genome: RID, src_genome_ext: RID, src_potential: RID, src_sig: RID, dst_mass: RID, dst_state: RID, _dst_genome: RID, dst_winner: RID, src_polarity: RID) -> RID:
+func _create_set_flow_conservative(src_state: RID, src_genome: RID, src_genome_ext: RID, src_potential: RID, src_det: RID, dst_mass: RID, dst_state: RID, _dst_genome: RID, dst_winner: RID, src_polarity: RID) -> RID:
 	var u_ubo = RDUniform.new()
 	u_ubo.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
 	u_ubo.binding = 0
@@ -922,11 +930,11 @@ func _create_set_flow_conservative(src_state: RID, src_genome: RID, src_genome_e
 	
 	# u_new_genome binding 6 removed (unused in shader)
 	
-	var u_sig = RDUniform.new()
-	u_sig.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-	u_sig.binding = 7
-	u_sig.add_id(sampler_linear)
-	u_sig.add_id(src_sig)
+	var u_det = RDUniform.new()
+	u_det.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	u_det.binding = 7
+	u_det.add_id(sampler_linear)
+	u_det.add_id(src_det)
 
 	var u_winner = RDUniform.new()
 	u_winner.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
@@ -945,10 +953,10 @@ func _create_set_flow_conservative(src_state: RID, src_genome: RID, src_genome_e
 	u_polarity.add_id(sampler_linear)
 	u_polarity.add_id(src_polarity)
 	
-	return rd.uniform_set_create([u_ubo, u_state, u_genome, u_pot, u_mass, u_new_state, u_sig, u_winner, u_genome_ext, u_polarity], shader_flow_conservative, 0)
+	return rd.uniform_set_create([u_ubo, u_state, u_genome, u_pot, u_mass, u_new_state, u_det, u_winner, u_genome_ext, u_polarity], shader_flow_conservative, 0)
 
 
-func _create_set_normalize(src_mass: RID, src_pot: RID, old_state: RID, dst_state: RID, dst_sig: RID, src_winner: RID, dst_genome: RID, old_genome: RID, src_genome_ext: RID, dst_genome_ext: RID, src_polarity: RID, dst_polarity: RID) -> RID:
+func _create_set_normalize(src_mass: RID, src_pot: RID, old_state: RID, dst_state: RID, dst_det: RID, src_winner: RID, dst_genome: RID, old_genome: RID, src_genome_ext: RID, dst_genome_ext: RID, src_polarity: RID, dst_polarity: RID, det_mass_accum: RID, det_hue_accum: RID) -> RID:
 	var u_ubo = RDUniform.new()
 	u_ubo.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
 	u_ubo.binding = 0
@@ -976,10 +984,10 @@ func _create_set_normalize(src_mass: RID, src_pot: RID, old_state: RID, dst_stat
 	u_new_state.binding = 4
 	u_new_state.add_id(dst_state)
 	
-	var u_new_sig = RDUniform.new()
-	u_new_sig.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
-	u_new_sig.binding = 5
-	u_new_sig.add_id(dst_sig)
+	var u_det = RDUniform.new()
+	u_det.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	u_det.binding = 5
+	u_det.add_id(dst_det)
 	
 	var u_winner = RDUniform.new()
 	u_winner.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
@@ -1018,8 +1026,18 @@ func _create_set_normalize(src_mass: RID, src_pot: RID, old_state: RID, dst_stat
 	u_polarity_dst.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
 	u_polarity_dst.binding = 12
 	u_polarity_dst.add_id(dst_polarity)
+
+	var u_det_mass_accum = RDUniform.new()
+	u_det_mass_accum.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	u_det_mass_accum.binding = 13
+	u_det_mass_accum.add_id(det_mass_accum)
+
+	var u_det_hue_accum = RDUniform.new()
+	u_det_hue_accum.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	u_det_hue_accum.binding = 14
+	u_det_hue_accum.add_id(det_hue_accum)
 	
-	return rd.uniform_set_create([u_ubo, u_mass, u_pot, u_old_state, u_new_state, u_new_sig, u_winner, u_new_genome, u_old_genome, u_genome_ext_src, u_genome_ext_dst, u_polarity_src, u_polarity_dst], shader_normalize, 0)
+	return rd.uniform_set_create([u_ubo, u_mass, u_pot, u_old_state, u_new_state, u_det, u_winner, u_new_genome, u_old_genome, u_genome_ext_src, u_genome_ext_dst, u_polarity_src, u_polarity_dst, u_det_mass_accum, u_det_hue_accum], shader_normalize, 0)
 
 # === PUBLIC API ===
 
@@ -1035,8 +1053,8 @@ func clear_simulation():
 	rd.texture_clear(tex_genome_b, Color(0,0,0,0), 0, 1, 0, 1)
 	rd.texture_clear(tex_genome_ext_a, Color(0,0,0,0), 0, 1, 0, 1)
 	rd.texture_clear(tex_genome_ext_b, Color(0,0,0,0), 0, 1, 0, 1)
-	rd.texture_clear(tex_signal_a, Color(0,0,0,0), 0, 1, 0, 1)
-	rd.texture_clear(tex_signal_b, Color(0,0,0,0), 0, 1, 0, 1)
+	rd.texture_clear(tex_detritus_a, Color(0,0,0,0), 0, 1, 0, 1)
+	rd.texture_clear(tex_detritus_b, Color(0,0,0,0), 0, 1, 0, 1)
 	rd.texture_clear(tex_polarity_a, Color(0,0,0,0), 0, 1, 0, 1)
 	rd.texture_clear(tex_polarity_b, Color(0,0,0,0), 0, 1, 0, 1)
 	# rd.barrier(RenderingDevice.BARRIER_MASK_COMPUTE) # barrier automatically inserted
@@ -1058,7 +1076,7 @@ func change_resolution(w: float, h: float):
 	rd.free_rid(pipeline_analysis)
 	rd.free_rid(pipeline_flow_conservative)
 	rd.free_rid(pipeline_normalize)
-	rd.free_rid(pipeline_signal)
+	rd.free_rid(pipeline_detritus)
 	
 	_free_resources()
 	
@@ -1074,7 +1092,7 @@ func change_resolution(w: float, h: float):
 	pipeline_analysis = rd.compute_pipeline_create(shader_analysis)
 	pipeline_flow_conservative = rd.compute_pipeline_create(shader_flow_conservative)
 	pipeline_normalize = rd.compute_pipeline_create(shader_normalize)
-	pipeline_signal = rd.compute_pipeline_create(shader_signal)
+	pipeline_detritus = rd.compute_pipeline_create(shader_detritus)
 	
 	_create_textures()
 	# Uniforms depend on texture RIDs, so recreate them?
@@ -1102,8 +1120,10 @@ func _free_resources():
 	if tex_genome_b.is_valid(): rd.free_rid(tex_genome_b)
 	if tex_genome_ext_a.is_valid(): rd.free_rid(tex_genome_ext_a)
 	if tex_genome_ext_b.is_valid(): rd.free_rid(tex_genome_ext_b)
-	if tex_signal_a.is_valid(): rd.free_rid(tex_signal_a)
-	if tex_signal_b.is_valid(): rd.free_rid(tex_signal_b)
+	if tex_detritus_a.is_valid(): rd.free_rid(tex_detritus_a)
+	if tex_detritus_b.is_valid(): rd.free_rid(tex_detritus_b)
+	if tex_detritus_mass_accum.is_valid(): rd.free_rid(tex_detritus_mass_accum)
+	if tex_detritus_hue_accum.is_valid(): rd.free_rid(tex_detritus_hue_accum)
 	if tex_polarity_a.is_valid(): rd.free_rid(tex_polarity_a)
 	if tex_polarity_b.is_valid(): rd.free_rid(tex_polarity_b)
 	if tex_conv_intermediate.is_valid(): rd.free_rid(tex_conv_intermediate)
@@ -1123,8 +1143,10 @@ func _free_resources():
 	tex_genome_b = RID()
 	tex_genome_ext_a = RID()
 	tex_genome_ext_b = RID()
-	tex_signal_a = RID()
-	tex_signal_b = RID()
+	tex_detritus_a = RID()
+	tex_detritus_b = RID()
+	tex_detritus_mass_accum = RID()
+	tex_detritus_hue_accum = RID()
 	tex_polarity_a = RID()
 	tex_polarity_b = RID()
 	tex_conv_intermediate = RID()

@@ -12,10 +12,10 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_theta_A;
     float u_alpha_n;
     float u_temperature;
-    float u_signal_advect;
+    float u_detritus_advect;     // was: u_signal_advect
     float u_beta;
-    float u_signal_diff;
-    float u_signal_decay;
+    float u_detritus_diff;       // was: u_signal_diff
+    float u_mass_decay_rate;     // was: u_signal_decay
     float u_flow_speed;
     float u_init_clusters;
     float u_init_density;
@@ -37,9 +37,9 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_wind_strength;
     float u_wind_speed;
 
-    // 3. Signal + Morph Extras
-    float u_signal_force_strength;
-    float u_signal_emission_strength;
+    // 3. Detritus + Morph Extras
+    float u_detritus_force_strength;  // was: u_signal_force_strength
+    float u_mass_digest_rate;         // was: u_signal_emission_strength
     float u_interaction_beta;
     float u_morph_anisotropy_gain;
 
@@ -53,11 +53,13 @@ layout(set = 0, binding = 0, std430) buffer Params {
 layout(set = 0, binding = 1) uniform sampler2D tex_state;
 layout(set = 0, binding = 2) uniform sampler2D tex_genome;
 layout(set = 0, binding = 4) uniform sampler2D tex_genome_ext; // Using binding 4 for extension texture
+layout(set = 0, binding = 5) uniform sampler2D tex_detritus;   // Detritus layer for mass counting
 
 layout(set = 0, binding = 3, std430) buffer Stats {
     uint total_mass;
     uint population;
     uint histograms[160]; // 10 bins * 16 genes
+    uint detritus_mass;   // Total detritus mass × 1000
 } s;
 
 vec2 unpack2(float packed) {
@@ -77,7 +79,15 @@ void main() {
     if (mass > 0.001) {
         atomicAdd(s.total_mass, uint(mass * 1000.0));
         atomicAdd(s.population, 1);
+    }
 
+    // Count detritus mass (all pixels, not just living)
+    float det_mass = texture(tex_detritus, uv).r;
+    if (det_mass > 0.0001) {
+        atomicAdd(s.detritus_mass, uint(det_mass * 1000.0));
+    }
+
+    if (mass > 0.001) {
         vec4 g1 = texture(tex_genome, uv);
         vec4 g2 = texture(tex_genome_ext, uv);
 

@@ -1,4 +1,4 @@
-[gd_resource type="VisualShader" load_steps=43 format=3 uid="uid://c0k5wtnr4aovd"]
+[gd_resource type="VisualShader" load_steps=44 format=3 uid="uid://c0k5wtnr4aovd"]
 
 [sub_resource type="VisualShaderNodeVectorDecompose" id="VisualShaderNodeVectorDecompose_njvc4"]
 
@@ -137,6 +137,9 @@ parameter_name = "camera_zoom"
 [sub_resource type="VisualShaderNodeFloatOp" id="VisualShaderNodeFloatOp_u2yqf"]
 default_input_values = [0, 0.0, 1, 0.001]
 operator = 2
+
+[sub_resource type="VisualShaderNodeColorFunc" id="VisualShaderNodeColorFunc_tcyj5"]
+function = 4
 
 [sub_resource type="VisualShaderNodeVectorOp" id="VisualShaderNodeVectorOp_pqul8"]
 default_input_values = [0, Vector2(0, 0), 1, Vector2(0.003, 0.001)]
@@ -379,15 +382,24 @@ void fragment() {
 	}
 
 
+	vec3 n_out79p0;
+// ColorFunc:79
+	{
+		vec3 c = clamp(n_out69p0, vec3(0.0), vec3(1.0));
+		const vec3 a = vec3(0.055f);
+		n_out79p0 = mix((vec3(1.0f) + a) * pow(c.rgb, vec3(1.0f / 2.4f)) - a, 12.92f * c.rgb, lessThan(c.rgb, vec3(0.0031308f)));
+	}
+
+
 // Output:0
-	COLOR.rgb = n_out69p0;
+	COLOR.rgb = n_out79p0;
 
 
 }
 "
 mode = 1
 flags/light_only = false
-nodes/fragment/0/position = Vector2(1720, -20)
+nodes/fragment/0/position = Vector2(1820, -20)
 nodes/fragment/3/node = SubResource("VisualShaderNodeTexture_d3vk6")
 nodes/fragment/3/position = Vector2(160, -220)
 nodes/fragment/4/node = SubResource("VisualShaderNodeInput_iiwv3")
@@ -486,4 +498,6 @@ nodes/fragment/77/node = SubResource("VisualShaderNodeFloatParameter_4x3on")
 nodes/fragment/77/position = Vector2(-1800, 380)
 nodes/fragment/78/node = SubResource("VisualShaderNodeFloatOp_u2yqf")
 nodes/fragment/78/position = Vector2(-1520, 380)
-nodes/fragment/connections = PackedInt32Array(3, 0, 10, 0, 7, 0, 12, 0, 6, 0, 11, 0, 4, 0, 14, 0, 14, 0, 15, 0, 14, 0, 5, 0, 14, 0, 8, 0, 14, 0, 9, 0, 5, 0, 20, 0, 20, 0, 3, 0, 8, 0, 21, 0, 21, 0, 6, 0, 9, 0, 22, 0, 22, 0, 7, 0, 24, 0, 26, 0, 24, 0, 27, 0, 26, 0, 5, 1, 24, 0, 8, 1, 27, 0, 9, 1, 13, 0, 58, 0, 15, 0, 16, 0, 16, 0, 59, 0, 59, 0, 60, 0, 60, 0, 58, 1, 10, 0, 61, 0, 61, 0, 13, 0, 11, 1, 62, 0, 62, 0, 13, 1, 12, 2, 63, 0, 63, 0, 13, 2, 60, 0, 63, 1, 60, 0, 62, 1, 60, 0, 61, 1, 70, 0, 65, 0, 68, 0, 70, 0, 71, 0, 70, 1, 66, 0, 73, 0, 73, 0, 65, 1, 65, 0, 74, 0, 74, 0, 69, 1, 58, 0, 69, 0, 69, 0, 0, 0, 75, 0, 26, 1, 75, 0, 27, 1, 77, 0, 78, 0, 78, 0, 75, 0)
+nodes/fragment/79/node = SubResource("VisualShaderNodeColorFunc_tcyj5")
+nodes/fragment/79/position = Vector2(1600, 20)
+nodes/fragment/connections = PackedInt32Array(3, 0, 10, 0, 7, 0, 12, 0, 6, 0, 11, 0, 4, 0, 14, 0, 14, 0, 15, 0, 14, 0, 5, 0, 14, 0, 8, 0, 14, 0, 9, 0, 5, 0, 20, 0, 20, 0, 3, 0, 8, 0, 21, 0, 21, 0, 6, 0, 9, 0, 22, 0, 22, 0, 7, 0, 24, 0, 26, 0, 24, 0, 27, 0, 26, 0, 5, 1, 24, 0, 8, 1, 27, 0, 9, 1, 13, 0, 58, 0, 15, 0, 16, 0, 16, 0, 59, 0, 59, 0, 60, 0, 60, 0, 58, 1, 10, 0, 61, 0, 61, 0, 13, 0, 11, 1, 62, 0, 62, 0, 13, 1, 12, 2, 63, 0, 63, 0, 13, 2, 60, 0, 63, 1, 60, 0, 62, 1, 60, 0, 61, 1, 70, 0, 65, 0, 68, 0, 70, 0, 71, 0, 70, 1, 66, 0, 73, 0, 73, 0, 65, 1, 65, 0, 74, 0, 74, 0, 69, 1, 58, 0, 69, 0, 75, 0, 26, 1, 75, 0, 27, 1, 77, 0, 78, 0, 78, 0, 75, 0, 69, 0, 79, 0, 79, 0, 0, 0)

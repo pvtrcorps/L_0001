@@ -11,10 +11,10 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_theta_A;
     float u_alpha_n;
     float u_temperature;
-    float u_signal_advect;
+    float u_detritus_advect;     // was: u_signal_advect
     float u_beta;
-    float u_signal_diff;
-    float u_signal_decay;
+    float u_detritus_diff;       // was: u_signal_diff
+    float u_mass_decay_rate;     // was: u_signal_decay
     float u_flow_speed;
     float u_init_clusters;
     float u_init_density;
@@ -30,8 +30,8 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_wind_strength;
     float u_wind_speed;
 
-    float u_signal_force_strength;
-    float u_signal_emission_strength;
+    float u_detritus_force_strength;  // was: u_signal_force_strength
+    float u_mass_digest_rate;         // was: u_signal_emission_strength
     float u_interaction_beta;
     float u_morph_anisotropy_gain;
     float u_colonize_thr;
@@ -45,13 +45,14 @@ layout(set = 0, binding = 2) uniform sampler2D tex_genome;
 layout(set = 0, binding = 3) uniform sampler2D tex_potential;
 layout(set = 0, binding = 4, r32ui) uniform uimage2D img_mass_accum;
 layout(set = 0, binding = 5, rgba32f) uniform image2D img_new_state;
-layout(set = 0, binding = 7) uniform sampler2D tex_signal;
+layout(set = 0, binding = 7) uniform sampler2D tex_detritus;  // R=mass, G=hue
 layout(set = 0, binding = 8, r32ui) uniform uimage2D img_winner_tracker;
 layout(set = 0, binding = 9) uniform sampler2D tex_genome_ext;
 layout(set = 0, binding = 10) uniform sampler2D tex_polarity;
 
 const float MASS_SCALE = 100000000.0;
 const float TWO_PI = 6.28318530718;
+const float PI = 3.14159265359;
 
 uint pcg_hash(uvec2 v) {
     v = v * 1664525u + 1013904223u;
@@ -157,6 +158,7 @@ void main() {
     float g_sensitivity = sec_sens.y;
 
     vec2 hues = unpack2(g2.a);
+    float g_emission_hue = hues.x;
     float g_detection_hue = hues.y;
 
     vec2 pixel_size = 1.0 / p.u_res;
@@ -193,21 +195,30 @@ void main() {
              + 1.0 * pot_BL.g + 2.0 * pot_BC.g + 1.0 * pot_BR.g;
     vec2 gradDensity = vec2(dx, dy);
 
-    vec3 myDetector = HueToRGB(g_detection_hue);
-    float sp_TL = dot(texture(tex_signal, uv + vec2(-1, -1) * pixel_size).rgb, myDetector);
-    float sp_TC = dot(texture(tex_signal, uv + vec2(0, -1) * pixel_size).rgb, myDetector);
-    float sp_TR = dot(texture(tex_signal, uv + vec2(1, -1) * pixel_size).rgb, myDetector);
-    float sp_ML = dot(texture(tex_signal, uv + vec2(-1, 0) * pixel_size).rgb, myDetector);
-    float sp_MR = dot(texture(tex_signal, uv + vec2(1, 0) * pixel_size).rgb, myDetector);
-    float sp_BL = dot(texture(tex_signal, uv + vec2(-1, 1) * pixel_size).rgb, myDetector);
-    float sp_BC = dot(texture(tex_signal, uv + vec2(0, 1) * pixel_size).rgb, myDetector);
-    float sp_BR = dot(texture(tex_signal, uv + vec2(1, 1) * pixel_size).rgb, myDetector);
+    // Detritus chemotaxis: navigate toward edible detritus
+    float dp_TL = texture(tex_detritus, uv + vec2(-1, -1) * pixel_size).r;
+    float dp_TC = texture(tex_detritus, uv + vec2(0, -1) * pixel_size).r;
+    float dp_TR = texture(tex_detritus, uv + vec2(1, -1) * pixel_size).r;
+    float dp_ML = texture(tex_detritus, uv + vec2(-1, 0) * pixel_size).r;
+    float dp_MR = texture(tex_detritus, uv + vec2(1, 0) * pixel_size).r;
+    float dp_BL = texture(tex_detritus, uv + vec2(-1, 1) * pixel_size).r;
+    float dp_BC = texture(tex_detritus, uv + vec2(0, 1) * pixel_size).r;
+    float dp_BR = texture(tex_detritus, uv + vec2(1, 1) * pixel_size).r;
 
-    float sgx = -1.0 * sp_TL + -2.0 * sp_ML + -1.0 * sp_BL
-              + 1.0 * sp_TR + 2.0 * sp_MR + 1.0 * sp_BR;
-    float sgy = -1.0 * sp_TL + -2.0 * sp_TC + -1.0 * sp_TR
-              + 1.0 * sp_BL + 2.0 * sp_BC + 1.0 * sp_BR;
-    vec2 gradSignal = vec2(sgx, sgy);
+    float dgx = -1.0 * dp_TL + -2.0 * dp_ML + -1.0 * dp_BL
+              + 1.0 * dp_TR + 2.0 * dp_MR + 1.0 * dp_BR;
+    float dgy = -1.0 * dp_TL + -2.0 * dp_TC + -1.0 * dp_TR
+              + 1.0 * dp_BL + 2.0 * dp_BC + 1.0 * dp_BR;
+    vec2 gradDetritus = vec2(dgx, dgy);
+
+    // Modulate navigation by hue selectivity: use detection_hue (prey preference)
+    // cos²(π × Δhue) peaks at 1.0 when detritus matches detection target, drops to 0 at opposite
+    float local_det_hue = texture(tex_detritus, uv).g;
+    float nav_hue_dist = abs(g_detection_hue - local_det_hue);
+    if (nav_hue_dist > 0.5) nav_hue_dist = 1.0 - nav_hue_dist;
+    float nav_factor = cos(PI * nav_hue_dist);
+    nav_factor *= nav_factor;  // cos² — 1 when det_hue matches detection target, 0 at opposite
+    gradDetritus *= nav_factor;
 
     float alpha = clamp((myMass / 2.0) * (myMass / 2.0), 0.0, 1.0);
 
@@ -223,7 +234,7 @@ void main() {
 
     float polarity_gain = max(0.0, p.u_morph_polarity_gain);
     vec2 totalAttraction = gradGrowthAniso
-                         + gradSignal * (g_sensitivity * p.u_signal_force_strength)
+                         + gradDetritus * (g_sensitivity * p.u_detritus_force_strength)
                          + polarity * (0.05 + 0.45 * g_anisotropy) * polarity_gain;
 
     vec2 totalRepulsion = gradDensity * mix(1.35, 0.5, g_compactness);
@@ -258,19 +269,19 @@ void main() {
     vec2 vel = mix(old_vel, target_vel, clamp(responsiveness * p.u_dt, 0.05, 1.0));
     vel *= clamp(1.0 - g_viscosity * p.u_dt * 2.0, 0.0, 1.0);
 
-    // Explicit polarity update: history + growth gradient + preferred signal gradient.
+    // Explicit polarity update: history + growth gradient + detritus gradient.
     vec2 growth_dir = normalize_or(gradGrowthAniso, polarity);
-    vec2 signal_dir = normalize_or(gradSignal, growth_dir);
+    vec2 detritus_dir = normalize_or(gradDetritus, growth_dir);
     vec2 vel_dir = normalize_or(vel, growth_dir);
 
     float w_hist = (0.55 + 0.25 * g_anisotropy) * polarity_gain;
     float w_growth = (0.30 + 0.25 * g_anisotropy) * polarity_gain;
-    // If signal force is 0, signal must not affect direction update.
-    float signal_gate = clamp(p.u_signal_force_strength, 0.0, 1.0);
-    float w_signal = (0.15 + 0.35 * g_sensitivity) * polarity_gain * signal_gate;
+    // If detritus force is 0, detritus must not affect direction update.
+    float detritus_gate = clamp(p.u_detritus_force_strength, 0.0, 1.0);
+    float w_detritus = (0.15 + 0.35 * g_sensitivity) * polarity_gain * detritus_gate;
     float w_vel = 0.15 + 0.20 * g_plasticity;
 
-    vec2 desired_raw = polarity * w_hist + growth_dir * w_growth + signal_dir * w_signal + vel_dir * w_vel;
+    vec2 desired_raw = polarity * w_hist + growth_dir * w_growth + detritus_dir * w_detritus + vel_dir * w_vel;
     vec2 desired_dir = normalize_or(desired_raw, polarity);
 
     float new_angle = atan(desired_dir.y, desired_dir.x) / TWO_PI;

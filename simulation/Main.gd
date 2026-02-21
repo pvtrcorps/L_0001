@@ -31,12 +31,12 @@ var ui_schema = {
 		["morph_plasticity_gain", "Plasticity Gain", 0.0, 3.0, 0.05],
 		["morph_self_propulsion_gain", "Self Propulsion", 0.0, 4.0, 0.05]
 	],
-	"Chemical Signal": [
-		["signal_diff", "Diffusion Rate", 0.0, 10.0, 0.1],
-		["signal_decay", "Decay Rate", 0.0, 1.0, 0.001],
-		["signal_advect", "Advection Weight", 0.0, 1.0, 0.01],
-		["signal_force_strength", "Signal Pull Force", 0.0, 5.0, 0.1],
-		["signal_emission_strength", "Signal Emission (Volume)", 0.0, 20.0, 0.1]
+	"Detritus / Nutrients": [
+		["detritus_diff", "Diffusion Rate", 0.0, 10.0, 0.1],
+		["mass_decay_rate", "Metabolic Decay", 0.0, 0.05, 0.001],
+		["detritus_advect", "Wind Advection", 0.0, 2.0, 0.05],
+		["detritus_force_strength", "Chemotaxis Strength", 0.0, 5.0, 0.1],
+		["mass_digest_rate", "Feeding Rate", 0.0, 1.0, 0.01]
 	],
 	"Wind / Atmosphere": [
 		["wind_scale", "Wind Scale", 0.0, 10.0, 0.1],
@@ -99,7 +99,7 @@ func _build_ui():
 	var stats_box = VBoxContainer.new()
 	stats_box.add_theme_constant_override("separation", 2)
 
-	for stat_name in ["Total Mass", "Coverage", "Diversity"]:
+	for stat_name in ["Total Mass", "Detritus", "Coverage", "Diversity"]:
 		var lbl = Label.new()
 		lbl.text = stat_name + ": ---"
 		lbl.add_theme_font_size_override("font_size", 10)
@@ -123,11 +123,11 @@ func _build_ui():
 		"morph_polarity_gain": "Global multiplier for internal heading persistence and directional steering.",
 		"morph_plasticity_gain": "Global multiplier for context-adaptive morphology and response.",
 		"morph_self_propulsion_gain": "Active locomotion force along internal polarity. Useful to reveal clear motion when signals/interactions are low.",
-		"signal_diff": "Diffusion rate of the chemical signal field.",
-		"signal_decay": "Signal dissipation over time.",
-		"signal_advect": "How much the signal is transported by flow velocity.",
-		"signal_force_strength": "Global multiplier for chemotactic pull.",
-		"signal_emission_strength": "Global multiplier for secretion amount.",
+		"detritus_diff": "Diffusion rate of the detritus (dead biomass) layer.",
+		"mass_decay_rate": "How fast living mass decays into detritus. Higher = more food but faster starvation.",
+		"detritus_advect": "How much detritus is transported by wind.",
+		"detritus_force_strength": "Global multiplier for chemotactic pull toward detritus.",
+		"mass_digest_rate": "How fast species absorb nearby detritus to replenish mass.",
 		"beta_selection": "Selection pressure for winner-takes-all identity transfer.",
 
 		"g_mu": "Optimal local density for growth.",
@@ -142,10 +142,10 @@ func _build_ui():
 		"g_repulsion": "Hollow core strength in kernel (donut-like perception).",
 		"g_density_tol": "Plasticity: context-driven morph adaptation gain.",
 		"g_mobility": "Base movement speed multiplier.",
-		"g_secretion": "Amount of emitted chemical signal.",
-		"g_sensitivity": "Response gain to detected signal.",
-		"g_emission_hue": "Signal color identity channel.",
-		"g_detection_hue": "Preferred signal color to follow/avoid."
+		"g_secretion": "Metabolic rate gene. Higher = faster decay (produces more detritus) but needs to eat more.",
+		"g_sensitivity": "Olfactory gain: how strongly this species follows detritus gradients.",
+		"g_emission_hue": "Color of cadaver/detritus when this species dies.",
+		"g_detection_hue": "Preferred detritus color to navigate toward (chemotaxis target)."
 	}
 
 	for group in ui_schema:
@@ -303,9 +303,12 @@ func _build_ui():
 	histogram_display = GeneHistogram.new()
 	ui_container.add_child(histogram_display)
 
-func _on_stats_updated(total_mass, population, histograms):
+func _on_stats_updated(total_mass, population, histograms, detritus_mass):
 	if stats_labels.has("Total Mass"):
-		stats_labels["Total Mass"].text = "Total Mass: " + str(int(total_mass))
+		stats_labels["Total Mass"].text = "Living Mass: " + str(int(total_mass))
+
+	if stats_labels.has("Detritus"):
+		stats_labels["Detritus"].text = "Detritus: " + str(int(detritus_mass)) + " (Total: " + str(int(total_mass + detritus_mass)) + ")"
 
 	if stats_labels.has("Coverage"):
 		var total_pixels = max(1.0, sim.params["res_x"] * sim.params["res_y"])

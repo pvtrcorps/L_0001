@@ -37,7 +37,7 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_colonize_thr;
     float u_morph_polarity_gain;
     float u_morph_plasticity_gain;
-    float u_pad0;
+    float u_morph_self_propulsion_gain;
 } p;
 
 layout(set = 0, binding = 1) uniform sampler2D tex_state;
@@ -48,6 +48,7 @@ layout(set = 0, binding = 5, rgba32f) uniform image2D img_new_state;
 layout(set = 0, binding = 7) uniform sampler2D tex_signal;
 layout(set = 0, binding = 8, r32ui) uniform uimage2D img_winner_tracker;
 layout(set = 0, binding = 9) uniform sampler2D tex_genome_ext;
+layout(set = 0, binding = 10) uniform sampler2D tex_polarity;
 
 const float MASS_SCALE = 100000000.0;
 const float TWO_PI = 6.28318530718;
@@ -111,6 +112,12 @@ uint calculate_gumbel_score(uint amt, float pot, float beta, vec2 seed_uv) {
     return uint(clamp(map_s, 1.0, 255.0));
 }
 
+vec2 normalize_or(vec2 v, vec2 fallback) {
+    float l = length(v);
+    if (l < 0.0001) return fallback;
+    return v / l;
+}
+
 void main() {
     ivec2 uv_i = ivec2(gl_GlobalInvocationID.xy);
     if (uv_i.x >= int(p.u_res.x) || uv_i.y >= int(p.u_res.y)) return;
@@ -141,7 +148,8 @@ void main() {
 
     vec2 plast_mob = unpack2(g2.g);
     float g_plasticity = clamp(plast_mob.x * p.u_morph_plasticity_gain, 0.0, 1.0);
-    float mass_gate = smoothstep(0.06, 0.25, myMass);
+    // Keep anisotropy active on peripheral mass so body plans do not collapse to cores.
+    float mass_gate = 0.32 + 0.68 * smoothstep(0.02, 0.22, myMass);
     float g_anisotropy = base_anisotropy * mass_gate * (1.0 - 0.35 * g_plasticity);
     float g_mobility = plast_mob.y;
 
@@ -203,8 +211,7 @@ void main() {
 
     float alpha = clamp((myMass / 2.0) * (myMass / 2.0), 0.0, 1.0);
 
-    float old_angle = state.a * TWO_PI;
-    vec2 polarity = vec2(cos(old_angle), sin(old_angle));
+    vec2 polarity = normalize_or(texture(tex_polarity, uv).xy, vec2(1.0, 0.0));
     vec2 polarity_perp = vec2(-polarity.y, polarity.x);
 
     float along = dot(gradGrowth, polarity);
@@ -226,6 +233,20 @@ void main() {
     float force_mult = p.u_flow_speed * (0.2 + g_mobility * 1.8) * (1.0 + 0.35 * plastic_boost);
     vec2 target_vel = force_mult * flow_field;
 
+    // Active locomotion term along internal polarity, so species can still move
+    // in weak-gradient scenarios (e.g. no signal pull / low inter-species forces).
+    float polarity_gate = clamp(polarity_gain, 0.0, 1.0);
+    float self_propulsion_gain = max(0.0, p.u_morph_self_propulsion_gain) * polarity_gate;
+    // Separate gate so active propulsion does not vanish on thin structures.
+    float propulsion_gate = 0.45 + 0.55 * smoothstep(0.01, 0.18, myMass);
+    float self_propulsion_speed = self_propulsion_gain
+                                * (0.10 + 0.90 * g_mobility)
+                                * (0.25 + 0.75 * g_anisotropy)
+                                * (0.85 + 0.30 * g_plasticity)
+                                * propulsion_gate;
+    vec2 self_propulsion = polarity * self_propulsion_speed;
+    target_vel += self_propulsion;
+
     float tv_len = length(target_vel);
     float max_v = 2.0 + g_mobility * 1.5;
     if (tv_len > max_v) target_vel = (target_vel / tv_len) * max_v;
@@ -237,12 +258,20 @@ void main() {
     vec2 vel = mix(old_vel, target_vel, clamp(responsiveness * p.u_dt, 0.05, 1.0));
     vel *= clamp(1.0 - g_viscosity * p.u_dt * 2.0, 0.0, 1.0);
 
-    vec2 desired_dir = polarity;
-    float vel_len = length(vel);
-    if (vel_len > 0.0001) {
-        float dir_mix = clamp((0.25 + 0.65 * g_plasticity) * polarity_gain, 0.0, 1.0);
-        desired_dir = normalize(mix(polarity, vel / vel_len, dir_mix));
-    }
+    // Explicit polarity update: history + growth gradient + preferred signal gradient.
+    vec2 growth_dir = normalize_or(gradGrowthAniso, polarity);
+    vec2 signal_dir = normalize_or(gradSignal, growth_dir);
+    vec2 vel_dir = normalize_or(vel, growth_dir);
+
+    float w_hist = (0.55 + 0.25 * g_anisotropy) * polarity_gain;
+    float w_growth = (0.30 + 0.25 * g_anisotropy) * polarity_gain;
+    // If signal force is 0, signal must not affect direction update.
+    float signal_gate = clamp(p.u_signal_force_strength, 0.0, 1.0);
+    float w_signal = (0.15 + 0.35 * g_sensitivity) * polarity_gain * signal_gate;
+    float w_vel = 0.15 + 0.20 * g_plasticity;
+
+    vec2 desired_raw = polarity * w_hist + growth_dir * w_growth + signal_dir * w_signal + vel_dir * w_vel;
+    vec2 desired_dir = normalize_or(desired_raw, polarity);
 
     float new_angle = atan(desired_dir.y, desired_dir.x) / TWO_PI;
     if (new_angle < 0.0) new_angle += 1.0;
@@ -281,6 +310,7 @@ void main() {
     float norm_factor = 1.0 / total_weight;
 
     uint total_amount = uint(round(myMass * MASS_SCALE));
+    uint identity_transfer_thr = uint(max(0.00005, p.u_colonize_thr * 0.35) * MASS_SCALE);
 
     if (total_amount > 0u) {
         uint remaining = total_amount;
@@ -320,8 +350,7 @@ void main() {
             uint jitter_2bit = pcg_hash_1d(src_idx) & 0x3u;
             uint packed_comp = (score_8bit << 24u) | (jitter_2bit << 22u) | (src_idx & 0x3FFFFFu);
 
-            uint thr_uint = uint(p.u_colonize_thr * MASS_SCALE);
-            if (score_8bit > 0u && amount > thr_uint && !is_void) {
+            if (score_8bit > 0u && amount > identity_transfer_thr && !is_void) {
                 imageAtomicMax(img_winner_tracker, target_uv, packed_comp);
             }
         }

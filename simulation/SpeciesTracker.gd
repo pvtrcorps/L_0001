@@ -108,6 +108,7 @@ class Species:
 		name = "%s %s %s" % [noun, morph_adj, beh_adj]
 
 static func get_fast_dist(g1: PackedFloat32Array, g2: PackedFloat32Array) -> float:
+	if g1.size() < 16 or g2.size() < 16: return 999.0
 	var d = 0.0
 	d += abs(g1[G_MU] - g2[G_MU]) * 2.0
 	d += abs(g1[G_SIGMA] - g2[G_SIGMA]) * 1.5
@@ -151,10 +152,8 @@ static func get_gene_distance(g1: Dictionary, g2: Dictionary) -> float:
 	d += hd * 2.0
 	return d
 
-var _temp_gene_buffer := PackedFloat32Array()
-
 func _init():
-	_temp_gene_buffer.resize(16)
+	pass
 
 func find_species(byte_data: PackedByteArray) -> Array:
 	if byte_data.size() < GRID_SIZE * GRID_SIZE * CELL_FLOATS * 4:
@@ -164,9 +163,12 @@ func find_species(byte_data: PackedByteArray) -> Array:
 	var species_list: Array[Species] = []
 	var species_genes: Array[PackedFloat32Array] = []
 
+	var local_gene_buffer := PackedFloat32Array()
+	local_gene_buffer.resize(16)
+	
 	var count = GRID_SIZE * GRID_SIZE
 	var floats_size = floats.size()
-
+	
 	for i in range(count):
 		var base = i * CELL_FLOATS
 		if base + 17 >= floats_size:
@@ -177,11 +179,11 @@ func find_species(byte_data: PackedByteArray) -> Array:
 			continue
 
 		for k in range(16):
-			_temp_gene_buffer[k] = floats[base + 1 + k]
+			local_gene_buffer[k] = floats[base + 1 + k]
 		var pol = floats[base + 17]
 
 		# Ignore inert/dead matter: mass can exist with zeroed genome.
-		var identity_strength = _temp_gene_buffer[G_MU] + _temp_gene_buffer[G_SIGMA] + _temp_gene_buffer[G_RADIUS]
+		var identity_strength = local_gene_buffer[G_MU] + local_gene_buffer[G_SIGMA] + local_gene_buffer[G_RADIUS]
 		if identity_strength < 0.01:
 			continue
 
@@ -189,7 +191,7 @@ func find_species(byte_data: PackedByteArray) -> Array:
 		var min_dist = GENE_SIMILARITY_THRESHOLD
 
 		for j in range(species_genes.size()):
-			var d = get_fast_dist(species_genes[j], _temp_gene_buffer)
+			var d = get_fast_dist(species_genes[j], local_gene_buffer)
 			if d < min_dist:
 				min_dist = d
 				best_match_idx = j
@@ -197,12 +199,12 @@ func find_species(byte_data: PackedByteArray) -> Array:
 					break
 
 		if best_match_idx != -1:
-			species_list[best_match_idx].add_sample(_temp_gene_buffer, m, pol)
+			species_list[best_match_idx].add_sample(local_gene_buffer, m, pol)
 		elif species_list.size() < 64:
 			var s = Species.new()
 			s.id = species_list.size() + 1
 
-			var new_gene_snapshot = _temp_gene_buffer.duplicate()
+			var new_gene_snapshot = local_gene_buffer.duplicate()
 			s.add_sample(new_gene_snapshot, m, pol)
 
 			species_list.append(s)

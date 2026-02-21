@@ -37,7 +37,7 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_colonize_thr;
     float u_morph_polarity_gain;
     float u_morph_plasticity_gain;
-    float u_pad0;
+    float u_morph_self_propulsion_gain;
 } p;
 
 layout(set = 0, binding = 1, r32ui) uniform uimage2D img_mass_accum;
@@ -50,6 +50,8 @@ layout(set = 0, binding = 7, rgba32f) uniform image2D img_new_genome;
 layout(set = 0, binding = 8) uniform sampler2D tex_old_genome;
 layout(set = 0, binding = 9) uniform sampler2D tex_genome_ext;
 layout(set = 0, binding = 10, rgba32f) uniform image2D img_new_genome_ext;
+layout(set = 0, binding = 11) uniform sampler2D tex_old_polarity;
+layout(set = 0, binding = 12, rgba32f) uniform image2D img_new_polarity;
 
 const float MASS_SCALE = 100000000.0;
 
@@ -74,6 +76,12 @@ vec3 HueToRGB(float hue) {
     return rgb;
 }
 
+vec2 normalize_or(vec2 v, vec2 fallback) {
+    float l = length(v);
+    if (l < 0.0001) return fallback;
+    return v / l;
+}
+
 void main() {
     ivec2 uv_i = ivec2(gl_GlobalInvocationID.xy);
     if (uv_i.x >= int(p.u_res.x) || uv_i.y >= int(p.u_res.y)) return;
@@ -84,10 +92,10 @@ void main() {
 
     vec4 flowData = imageLoad(img_new_state, uv_i);
     vec2 velocity = flowData.gb;
-    float final_polarity = flowData.a;
 
     vec2 px = 1.0 / p.u_res;
     vec2 uv = (vec2(uv_i) + 0.5) * px;
+    vec2 final_polarity = normalize_or(texture(tex_old_polarity, uv).xy, vec2(1.0, 0.0));
 
     uint packed = imageLoad(img_winner_tracker, uv_i).r;
     imageStore(img_winner_tracker, uv_i, uvec4(0));
@@ -105,7 +113,8 @@ void main() {
         finalGenome1 = texture(tex_old_genome, winner_uv);
         finalGenome2 = texture(tex_genome_ext, winner_uv);
         // Keep polarity coherent with the winning source that transferred identity.
-        final_polarity = imageLoad(img_new_state, winner_coords).a;
+        float winner_angle = imageLoad(img_new_state, winner_coords).a;
+        final_polarity = vec2(cos(winner_angle * 6.28318530718), sin(winner_angle * 6.28318530718));
 
         bool is_raw_null = dot(finalGenome1, finalGenome1) < 0.0001;
 
@@ -117,6 +126,7 @@ void main() {
         if (is_raw_null || trait_sum < 0.01) {
             finalGenome1 = vec4(0.0);
             finalGenome2 = vec4(0.0);
+            final_polarity = vec2(0.0);
         }
     }
 
@@ -130,6 +140,9 @@ void main() {
     float g_emission_hue = hues.x;
 
     float finalMass = mass;
+    // Identity cleanup threshold is decoupled from neighborhood/transfer thresholds
+    // to preserve coherent thin tails while still deleting dust.
+    float identity_prune_thr = max(0.00005, p.u_colonize_thr * 0.35);
 
     bool has_identity = dot(finalGenome1, finalGenome1) > 0.0001;
     if (finalMass > 0.0001 && has_identity) {
@@ -150,18 +163,21 @@ void main() {
         imageStore(img_new_signal, uv_i, vec4(max(vec3(0.0), nextSignal), 0.0));
     }
 
-    if (finalMass < p.u_colonize_thr) {
+    if (finalMass < identity_prune_thr) {
         finalGenome1 = vec4(0.0);
         finalGenome2 = vec4(0.0);
+        final_polarity = vec2(0.0);
     }
 
     if (finalMass <= 0.0) {
         imageStore(img_new_state, uv_i, vec4(0.0));
         imageStore(img_new_genome, uv_i, vec4(0.0));
         imageStore(img_new_genome_ext, uv_i, vec4(0.0));
+        imageStore(img_new_polarity, uv_i, vec4(0.0));
     } else {
-        imageStore(img_new_state, uv_i, vec4(finalMass, velocity, final_polarity));
+        imageStore(img_new_state, uv_i, vec4(finalMass, velocity, 0.0));
         imageStore(img_new_genome, uv_i, finalGenome1);
         imageStore(img_new_genome_ext, uv_i, finalGenome2);
+        imageStore(img_new_polarity, uv_i, vec4(final_polarity, 0.0, 0.0));
     }
 }

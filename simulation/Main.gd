@@ -28,7 +28,8 @@ var ui_schema = {
 	"Morph Dynamics": [
 		["morph_anisotropy_gain", "Anisotropy Gain", 0.0, 2.0, 0.05],
 		["morph_polarity_gain", "Polarity Gain", 0.0, 3.0, 0.05],
-		["morph_plasticity_gain", "Plasticity Gain", 0.0, 3.0, 0.05]
+		["morph_plasticity_gain", "Plasticity Gain", 0.0, 3.0, 0.05],
+		["morph_self_propulsion_gain", "Self Propulsion", 0.0, 4.0, 0.05]
 	],
 	"Chemical Signal": [
 		["signal_diff", "Diffusion Rate", 0.0, 10.0, 0.1],
@@ -121,6 +122,7 @@ func _build_ui():
 		"morph_anisotropy_gain": "Global multiplier for elongation/directional kernel effects. 0 disables anisotropy.",
 		"morph_polarity_gain": "Global multiplier for internal heading persistence and directional steering.",
 		"morph_plasticity_gain": "Global multiplier for context-adaptive morphology and response.",
+		"morph_self_propulsion_gain": "Active locomotion force along internal polarity. Useful to reveal clear motion when signals/interactions are low.",
 		"signal_diff": "Diffusion rate of the chemical signal field.",
 		"signal_decay": "Signal dissipation over time.",
 		"signal_advect": "How much the signal is transported by flow velocity.",

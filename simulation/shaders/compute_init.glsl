@@ -19,7 +19,7 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_flow_speed;
     float u_init_clusters;
     float u_init_density;
-    float u_colonize_thr;
+    float u_fluid_momentum;
 
     // 1. Gene Ranges (16 Genes * 2) = 32 floats
     // Block A: Physiology
@@ -31,16 +31,29 @@ layout(set = 0, binding = 0, std430) buffer Params {
     // Block D: Senses
     vec2 r_secretion; vec2 r_sensitivity; vec2 r_emission_hue; vec2 r_detection_hue;
 
-    // Wind / Atmosphere
+    // 2. Wind / Atmosphere
     float u_time;
     float u_wind_scale;
     float u_wind_strength;
     float u_wind_speed;
+
+    // 3. Signal + Morph Extras
+    float u_signal_force_strength;
+    float u_signal_emission_strength;
+    float u_interaction_beta;
+    float u_morph_anisotropy_gain;
+
+    // 4. Morph Controls + Cleanup
+    float u_colonize_thr;
+    float u_morph_polarity_gain;
+    float u_morph_plasticity_gain;
+    float u_morph_self_propulsion_gain;
 } p;
 
 layout(set = 0, binding = 1, rgba32f) uniform image2D img_state;
 layout(set = 0, binding = 2, rgba32f) uniform image2D img_genome;
 layout(set = 0, binding = 3, rgba32f) uniform image2D img_genome_ext;
+layout(set = 0, binding = 4, rgba32f) uniform image2D img_polarity;
 
 float hash(vec2 pt) {
     return fract(sin(dot(pt, vec2(12.9898, 78.233))) * 43758.5453);
@@ -67,13 +80,14 @@ void main() {
     if (cell_hash < p.u_init_density) {
         vec2 cell_center = (vec2(cell_x, cell_y) + 0.5) / p.u_init_clusters;
         float d = length(uv - cell_center) * p.u_init_clusters;
-        density = smoothstep(0.30001, 0.3, d);
+        density = smoothstep(0.30001, 0.3, d)*0.25;
     }
 
     if (density < 0.0001) {
         imageStore(img_state, uv_i, vec4(0.0));
         imageStore(img_genome, uv_i, vec4(0.0));
         imageStore(img_genome_ext, uv_i, vec4(0.0));
+        imageStore(img_polarity, uv_i, vec4(0.0));
         return;
     }
 
@@ -121,10 +135,12 @@ void main() {
         pack2(g_emission_hue, g_detection_hue)
     );
 
-    // state.a stores local morphology polarity angle in [0, 1).
-    float polarity = hash(species_seed + 17.0);
+    // Polarity is now stored in a dedicated texture as a unit direction vector.
+    float polarity_angle = hash(species_seed + 17.0) * 6.28318530718;
+    vec2 polarity = vec2(cos(polarity_angle), sin(polarity_angle));
 
-    imageStore(img_state, uv_i, vec4(density, 0.0, 0.0, polarity));
+    imageStore(img_state, uv_i, vec4(density, 0.0, 0.0, 0.0));
     imageStore(img_genome, uv_i, packed_1);
     imageStore(img_genome_ext, uv_i, packed_2);
+    imageStore(img_polarity, uv_i, vec4(polarity, 0.0, 0.0));
 }

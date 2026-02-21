@@ -4,6 +4,7 @@ uniform sampler2D tex_state : repeat_enable, filter_linear;
 uniform sampler2D tex_genome : repeat_enable, filter_linear;
 uniform sampler2D tex_genome_ext : repeat_enable, filter_linear;
 uniform sampler2D tex_signal : repeat_enable, filter_linear;
+uniform sampler2D tex_polarity : repeat_enable, filter_linear;
 uniform vec2 camera_pos = vec2(0.0, 0.0);
 uniform float camera_zoom = 1.0;
 uniform bool u_show_select = false;
@@ -87,8 +88,9 @@ void fragment() {
     col += vec3(1.0) * specular * 0.8 * smoothstep(0.1, 0.3, mass);
 
     // Polarity stripe
-    float angle = state.a * (2.0 * PI);
-    vec2 axis = vec2(cos(angle), sin(angle));
+    vec2 axis = texture(tex_polarity, uv).xy;
+    float axis_len = length(axis);
+    axis = (axis_len > 0.0001) ? (axis / axis_len) : vec2(1.0, 0.0);
     vec2 p = (uv - floor(uv * 64.0) / 64.0 - 0.5) * 2.0;
     float stripe = 0.5 + 0.5 * sin(dot(p, axis) * 8.0);
     col += col_detect * stripe * 0.15 * anisotropy * mass;

@@ -19,7 +19,7 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_flow_speed;
     float u_init_clusters;
     float u_init_density;
-    float u_colonize_thr;
+    float u_fluid_momentum;
     
     // 1. Gene Ranges (16 Genes * 2) = 32 floats
     // Block A: Physiology
@@ -31,11 +31,23 @@ layout(set = 0, binding = 0, std430) buffer Params {
     // Block D: Senses
     vec2 r_secretion; vec2 r_sensitivity; vec2 r_emission_hue; vec2 r_detection_hue;
     
-    // Wind / Atmosphere
+    // 2. Wind / Atmosphere
     float u_time;
     float u_wind_scale;
     float u_wind_strength;
     float u_wind_speed;
+
+    // 3. Signal + Morph Extras
+    float u_signal_force_strength;
+    float u_signal_emission_strength;
+    float u_interaction_beta;
+    float u_morph_anisotropy_gain;
+
+    // 4. Morph Controls + Cleanup
+    float u_colonize_thr;
+    float u_morph_polarity_gain;
+    float u_morph_plasticity_gain;
+    float u_morph_self_propulsion_gain;
 } p;
 
 layout(set = 0, binding = 1) uniform sampler2D tex_state;

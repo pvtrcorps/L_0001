@@ -42,7 +42,7 @@ layout(set = 0, binding = 0, std430) buffer Params {
     float u_colonize_thr;
     float u_morph_polarity_gain;
     float u_morph_plasticity_gain;
-    float u_pad0;
+    float u_morph_self_propulsion_gain;
 } p;
 
 layout(set = 0, binding = 1) uniform sampler2D tex_state;
@@ -50,6 +50,7 @@ layout(set = 0, binding = 2) uniform sampler2D tex_genome;
 layout(set = 0, binding = 3) uniform sampler2D tex_signal;
 layout(set = 0, binding = 4, rgba32f) uniform image2D img_potential;
 layout(set = 0, binding = 5) uniform sampler2D tex_genome_ext;
+layout(set = 0, binding = 6) uniform sampler2D tex_polarity;
 
 shared vec2 tile_cache[TILE_AREA];
 
@@ -132,7 +133,6 @@ void main() {
     float g_radius = rad_visc.x;
 
     vec2 hue_hue = unpack2(g2.a);
-    float my_emission_hue = hue_hue.x;
     float g_detection_hue = hue_hue.y;
 
     vec2 shape_ab = unpack2(g1.b);
@@ -146,16 +146,24 @@ void main() {
 
     vec2 plast_mob = unpack2(g2.g);
     float g_plasticity = clamp(plast_mob.x * p.u_morph_plasticity_gain, 0.0, 1.0);
-    float mass_gate = smoothstep(0.06, 0.25, state.r);
+    // Keep directional morphology alive even in thin peripheral tissue.
+    float mass_gate = 0.35 + 0.65 * smoothstep(0.02, 0.22, state.r);
     float g_anisotropy = base_anisotropy * mass_gate * (1.0 - 0.35 * g_plasticity);
+
+    // Separate threshold for neighborhood influence (lower than identity threshold).
+    float neighbor_mass_thr = max(0.00005, p.u_colonize_thr * 0.15);
 
     float R_actual = max(p.u_R * g_radius, 1.0);
     R_actual = min(R_actual, float(MAX_RADIUS));
 
     KernelParams kp;
-    kp.b1 = (0.1 + shape_ab.x * 0.9) - g_repulsion * 1.5;
-    kp.b2 = shape_ab.y - g_repulsion * 0.5;
-    kp.b3 = mix(1.15, 0.7, g_compactness) * (0.1 + (1.0 - shape_ab.x) * 0.9);
+    // Softer compact-core bias: preserve outer ring support for tails/heads.
+    kp.b1 = max(-0.9, (0.12 + shape_ab.x * 0.88) - g_repulsion * 1.00);
+    kp.b2 = max(-0.4, (0.08 + shape_ab.y * 0.92) - g_repulsion * 0.30);
+    float shell_support = (0.20 + (1.0 - shape_ab.x) * 0.80);
+    float shell_compact = mix(1.15, 0.90, g_compactness);
+    float shell_context = 1.0 + 0.12 * g_plasticity + 0.08 * g_anisotropy;
+    kp.b3 = shell_support * shell_compact * shell_context;
 
     kp.a1 = 0.15;
     kp.a2 = 0.35 + g_shape_c * 0.3;
@@ -165,8 +173,9 @@ void main() {
     kp.w2 = 0.20;
     kp.w3 = 0.15;
 
-    float angle = state.a * (2.0 * PI);
-    vec2 axis = vec2(cos(angle), sin(angle));
+    vec2 pol_vec = texture(tex_polarity, uv).xy;
+    float pol_len = length(pol_vec);
+    vec2 axis = (pol_len > 0.0001) ? (pol_vec / pol_len) : vec2(1.0, 0.0);
     vec2 axis_perp = vec2(-axis.y, axis.x);
     float axis_stretch = mix(1.0, 1.65, g_anisotropy);
 
@@ -196,7 +205,7 @@ void main() {
 
             float w = eval_kernel(r_ell, R_actual, kp);
 
-            if (w > 0.0001 && neighborMass >= p.u_colonize_thr) {
+            if (w > 0.0001 && neighborMass >= neighbor_mass_thr) {
                 sumAll += neighborMass * w;
                 weightAll += w;
 

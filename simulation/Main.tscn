@@ -14,6 +14,7 @@ shader_parameter/u_show_select = false
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_post"]
 shader = ExtResource("4_post")
+shader_parameter/camera_zoom = 0.0
 
 [node name="Main" type="Node"]
 script = ExtResource("3_main")
@@ -21,6 +22,7 @@ script = ExtResource("3_main")
 [node name="LeniaSimulation" type="Node" parent="."]
 script = ExtResource("2_sim")
 display_material = SubResource("ShaderMaterial_1")
+postprocess_material = SubResource("ShaderMaterial_post")
 
 [node name="CanvasLayer" type="CanvasLayer" parent="."]
 

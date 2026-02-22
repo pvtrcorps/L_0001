@@ -61,7 +61,7 @@ layout(set = 0, binding = 14, r32ui) uniform uimage2D img_detritus_hue_accum;
 
 const float MASS_SCALE = 100000000.0;
 const float DETRITUS_SCALE = 100000000.0;
-const float HUE_SCALE = 10000.0;
+const float HUE_ACCUM_SCALE = 100000000.0; // Must match compute_detritus.glsl
 
 vec2 unpack2(float packed) {
     uint bits = floatBitsToUint(packed) & ~0x40000000u;
@@ -135,8 +135,11 @@ void main() {
     imageStore(img_detritus_hue_accum, uv_i, uvec4(0));
 
     float det_mass = float(det_mass_uint) / DETRITUS_SCALE;
+    // hue_accum encodes Σ(mass_i × hue_i × HUE_ACCUM_SCALE)
+    // mass_accum encodes Σ(mass_i × DETRITUS_SCALE)
+    // Since HUE_ACCUM_SCALE == DETRITUS_SCALE, ratio = Σ(mass_i × hue_i) / Σ(mass_i) = weighted avg hue
     float det_hue = (det_mass_uint > 0u)
-        ? (float(det_hue_uint) / float(det_mass_uint)) / HUE_SCALE
+        ? float(det_hue_uint) / float(det_mass_uint)
         : 0.0;
     det_hue = clamp(det_hue, 0.0, 1.0);
 
@@ -194,10 +197,14 @@ void main() {
         final_polarity = vec2(0.0);
     }
 
-    // Handle mass without identity — also goes to detritus (cleanup rule)
+    // Handle mass without identity — transfer to detritus only if hue is valid
+    // Otherwise discard, since orphan mass with hue=0 creates wrong-colored glow
     if (finalMass > 0.0 && !has_identity) {
-        det_mass += finalMass;
-        // No hue contribution from identity-less mass (keep existing hue)
+        if (det_mass > 0.0001) {
+            // Existing detritus has valid hue — safe to absorb orphan mass
+            det_mass += finalMass;
+        }
+        // else: discard orphan mass (tiny amount, no valid hue to assign)
         finalMass = 0.0;
     }
 

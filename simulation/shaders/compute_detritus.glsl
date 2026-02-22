@@ -54,7 +54,7 @@ layout(set = 0, binding = 2, r32ui) uniform uimage2D img_detritus_mass_accum;
 layout(set = 0, binding = 3, r32ui) uniform uimage2D img_detritus_hue_accum;
 
 const float DETRITUS_SCALE = 100000000.0;  // Same precision as mass
-const float HUE_SCALE = 10000.0;           // Hue precision (4 decimal places)
+const float HUE_ACCUM_SCALE = 100000000.0; // Separate scale for hue×mass accumulator (fits uint32)
 
 // === Noise functions (same as old compute_signal.glsl) ===
 
@@ -170,7 +170,6 @@ void main() {
 
     // === 3. Distribute mass via atomics (perfectly conservative) ===
     uint total_amount = uint(round(myMass * DETRITUS_SCALE));
-    uint hue_encoded = uint(round(clamp(myHue, 0.0, 1.0) * HUE_SCALE));
 
     if (total_amount > 0u) {
         uint remaining = total_amount;
@@ -199,14 +198,18 @@ void main() {
 
             ivec2 target_uv = (center_i + offsets[i] + ivec2(p.u_res)) % ivec2(p.u_res);
             imageAtomicAdd(img_detritus_mass_accum, target_uv, amount);
-            // Mass-weighted hue: accumulate (hue × mass) for later averaging
-            imageAtomicAdd(img_detritus_hue_accum, target_uv, amount * hue_encoded);
+            // Hue accumulator: encode (fractional_mass × hue) directly to avoid overflow
+            float frac_mass = float(amount) / DETRITUS_SCALE;
+            uint hue_contrib = uint(round(frac_mass * clamp(myHue, 0.0, 1.0) * HUE_ACCUM_SCALE));
+            imageAtomicAdd(img_detritus_hue_accum, target_uv, hue_contrib);
         }
 
         if (remaining > 0u) {
             ivec2 remainder_uv = (center_i + offsets[target_remainder_idx] + ivec2(p.u_res)) % ivec2(p.u_res);
             imageAtomicAdd(img_detritus_mass_accum, remainder_uv, remaining);
-            imageAtomicAdd(img_detritus_hue_accum, remainder_uv, remaining * hue_encoded);
+            float frac_rem = float(remaining) / DETRITUS_SCALE;
+            uint hue_rem = uint(round(frac_rem * clamp(myHue, 0.0, 1.0) * HUE_ACCUM_SCALE));
+            imageAtomicAdd(img_detritus_hue_accum, remainder_uv, hue_rem);
         }
     }
 }

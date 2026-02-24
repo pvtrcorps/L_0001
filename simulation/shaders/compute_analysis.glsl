@@ -71,22 +71,33 @@ void main() {
     uint idx_y = gl_GlobalInvocationID.y;
     if (idx_x >= 64 || idx_y >= 64) return;
 
-    // Selection Bias: Favor center pixels of the 16x16 block (1024/64 = 16)
+    // Selection Bias: Favor center pixels of the analysis block for this resolution.
     float best_score = -1.0;
     vec2 best_uv = (vec2(idx_x, idx_y) + 0.5) / 64.0;
-    
-    vec2 start_px = vec2(idx_x, idx_y) * (p.u_res / 64.0);
-    for(int iy = 0; iy < 16; iy++) {
-        for(int ix = 0; ix < 16; ix++) {
-            vec2 sample_uv = (start_px + vec2(float(ix), float(iy)) + 0.5) / p.u_res;
+
+    ivec2 res_i = ivec2(p.u_res);
+    ivec2 block_min = ivec2(
+        int((idx_x * uint(res_i.x)) / 64u),
+        int((idx_y * uint(res_i.y)) / 64u)
+    );
+    ivec2 block_max = ivec2(
+        int(((idx_x + 1u) * uint(res_i.x)) / 64u),
+        int(((idx_y + 1u) * uint(res_i.y)) / 64u)
+    );
+    block_max = max(block_max, block_min + ivec2(1));
+
+    vec2 block_center = (vec2(block_min + block_max) * 0.5) - vec2(0.5);
+
+    for (int py = block_min.y; py < block_max.y; py++) {
+        for (int px_i = block_min.x; px_i < block_max.x; px_i++) {
+            vec2 sample_uv = (vec2(float(px_i), float(py)) + 0.5) / p.u_res;
             float m = texture(tex_state, sample_uv).r;
-            
-            // Score = mass / (1.0 + distance_to_cell_center_bias)
-            // Distance in local 16x16 pixels [0..15]
-            float dx = float(ix) - 7.5;
-            float dy = float(iy) - 7.5;
-            float dist_sq = dx*dx + dy*dy;
-            float score = m / (1.0 + 0.05 * dist_sq); // Lower bias weight for larger area
+
+            // Score = mass / (1 + center-distance bias), computed in pixel space
+            // so behavior scales correctly across 1024/2048/4096 and non-power-of-two sizes.
+            vec2 d = vec2(float(px_i), float(py)) - block_center;
+            float dist_sq = dot(d, d);
+            float score = m / (1.0 + 0.05 * dist_sq);
 
             if (score > best_score) {
                 best_score = score;

@@ -100,7 +100,8 @@ void main() {
     vec4 finalGenome2 = texture(tex_genome_ext, uv);
 
     if (packed != 0u) {
-        uint winner_idx = packed & 0x3FFFFFu;
+        // Winner payload is packed as [8-bit score | 24-bit src_idx].
+        uint winner_idx = packed & 0xFFFFFFu;
 
         ivec2 res = ivec2(p.u_res);
         ivec2 winner_coords = ivec2(winner_idx % uint(res.x), winner_idx / uint(res.x));

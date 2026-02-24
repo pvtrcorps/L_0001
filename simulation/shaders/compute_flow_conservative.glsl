@@ -358,8 +358,9 @@ void main() {
             vec2 noise_uv = uv + vec2(float(i) * 0.1, p.u_seed);
             uint score_8bit = calculate_gumbel_score(amount, source_pot, p.u_beta, noise_uv);
 
-            uint jitter_2bit = pcg_hash_1d(src_idx) & 0x3u;
-            uint packed_comp = (score_8bit << 24u) | (jitter_2bit << 22u) | (src_idx & 0x3FFFFFu);
+            // Pack as [8-bit score | 24-bit src_idx] so 4096x4096 grids fit exactly.
+            // (4096*4096 = 16,777,216 cells -> 24 bits of index range)
+            uint packed_comp = (score_8bit << 24u) | (src_idx & 0xFFFFFFu);
 
             if (score_8bit > 0u && amount > identity_transfer_thr && !is_void) {
                 imageAtomicMax(img_winner_tracker, target_uv, packed_comp);
